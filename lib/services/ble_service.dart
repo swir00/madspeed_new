@@ -301,7 +301,8 @@ class BLEService with ChangeNotifier {
       await sendControlCommand("REQUEST_LOGS"); // Wysyłamy komendę, aby ESP32 zaczął wysyłać logi
 
       // Czekaj na zakończenie transferu logów
-      final List<LogDataPoint> logPoints = await _logDataCompleter!.future.timeout(const Duration(seconds: 30), onTimeout: () {
+      // Zwiększono timeout dla dużych logów danych
+      final List<LogDataPoint> logPoints = await _logDataCompleter!.future.timeout(const Duration(seconds: 60), onTimeout: () {
         debugPrint("[LOG CHUNK TIMEOUT] Log data transfer timed out.");
         _receivedLogJson = ""; // Wyczyść bufor w przypadku timeoutu
         return []; // Zwróć pustą listę w przypadku timeoutu

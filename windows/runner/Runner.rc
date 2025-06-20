@@ -90,21 +90,12 @@ BEGIN
         BLOCK "040904e4"
         BEGIN
             VALUE "CompanyName", "com.example" "\0"
-<<<<<<< HEAD
             VALUE "FileDescription", "madspeed_new" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
             VALUE "InternalName", "madspeed_new" "\0"
             VALUE "LegalCopyright", "Copyright (C) 2025 com.example. All rights reserved." "\0"
             VALUE "OriginalFilename", "madspeed_new.exe" "\0"
             VALUE "ProductName", "madspeed_new" "\0"
-=======
-            VALUE "FileDescription", "madspeed_app" "\0"
-            VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "madspeed_app" "\0"
-            VALUE "LegalCopyright", "Copyright (C) 2025 com.example. All rights reserved." "\0"
-            VALUE "OriginalFilename", "madspeed_app.exe" "\0"
-            VALUE "ProductName", "madspeed_app" "\0"
->>>>>>> 453f572e89beca443a1d48bec0e29d104017f543
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

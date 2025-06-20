@@ -24,8 +24,8 @@ void sendPMTKCommand(const String& command);
 #include <SPIFFS.h>        // Do obsługi systemu plików
 
 // --- Parametry precyzji GNSS ---
-#define MIN_DISTANCE_M    0.05  // ZMNIEJSZONO: Min. odległość do dodania do dystansu (w metrach)
-#define MIN_SPEED_KMH     0.5   // Min. prędkość do uznania za ruch (w km/h)
+#define MIN_DISTANCE_M    0.01  // ZMNIEJSZONO: Min. odległość do dodania do dystansu (w metrach)
+#define MIN_SPEED_KMH     0.1   // ZMNIEJSZONO: Min. prędkość do uznania za ruch (w km/h)
 #define MIN_SATS          7     // Min. liczba satelitów dla dobrej precyzji
 #define MAX_HDOP          2.5   // Maks. HDOP (Horizontal Dilution of Precision) dla dobrej precyzji
 #define MAX_FIX_AGE_MS    1500  // Maks. wiek poprawki GNSS (w milisekundach), po którym dane są uznawane za stare
@@ -59,6 +59,8 @@ int speedCount = 0;
 float distance_km = 0;
 float lastLat = 0.0;
 float lastLng = 0.0;
+bool hasFirstFixForDistance = false; // NOWA FLAGA DO INICJALIZACJI DYSTANSY
+
 String measurementDataBuffer = ""; // Bufor na dane do zapisu do pliku
 unsigned long lastFileWriteMillis = 0;
 const unsigned long FILE_WRITE_INTERVAL_MS = 5000; // Interwał zapisu danych do pliku (5 sekund)
@@ -120,7 +122,11 @@ class MyCharacteristicCallbacks: public BLECharacteristicCallbacks {
 
         if (command == "START_LOG") {
           loggingActive = true;
-          maxSpeed = 0; sumSpeed = 0; speedCount = 0; distance_km = 0; lastLat = 0.0; lastLng = 0.0;
+          maxSpeed = 0; sumSpeed = 0; speedCount = 0; distance_km = 0; 
+          lastLat = 0.0; // Reset lastLat/Lng, będą zainicjalizowane pierwszym dobrym fixem
+          lastLng = 0.0;
+          hasFirstFixForDistance = false; // Resetuj flagę pierwszego fix'a
+
           measurementDataBuffer = ""; // Wyczyść bufor
           lastFileWriteMillis = millis(); 
           isLogTransferActive = false; // Zatrzymaj ewentualny transfer logów
@@ -134,7 +140,11 @@ class MyCharacteristicCallbacks: public BLECharacteristicCallbacks {
           // Transfer zostanie zainicjowany przez komendę REQUEST_LOGS z Fluttera.
         } else if (command == "RESET") {
           loggingActive = false;
-          maxSpeed = 0; sumSpeed = 0; speedCount = 0; distance_km = 0; lastLat = 0.0; lastLng = 0.0;
+          maxSpeed = 0; sumSpeed = 0; speedCount = 0; distance_km = 0; 
+          lastLat = 0.0; 
+          lastLng = 0.0;
+          hasFirstFixForDistance = false; // Resetuj flagę pierwszego fix'a
+
           measurementDataBuffer = ""; 
           if (SPIFFS.exists(DATA_FILE)) {
             SPIFFS.remove(DATA_FILE); // Usuń plik logowania
@@ -155,11 +165,17 @@ class MyCharacteristicCallbacks: public BLECharacteristicCallbacks {
                       if (line.length() > 0) {
                           int firstComma = line.indexOf(',');
                           int secondComma = line.indexOf(',', firstComma + 1);
-                          if (firstComma != -1 && secondComma != -1) { 
+                          int thirdComma = line.indexOf(',', secondComma + 1); // Nowy: do lat
+                          int fourthComma = line.indexOf(',', thirdComma + 1); // Nowy: do lng
+
+                          if (firstComma != -1 && secondComma != -1 && thirdComma != -1 && fourthComma != -1) { 
                               if (hasData) fullLogDataToTransfer += ","; 
+                              // Zmiana formatu JSON, aby pasował do LogDataPoint (timestamp, speed, distance, latitude, longitude)
                               fullLogDataToTransfer += "{\"timestamp\":" + line.substring(0, firstComma) + 
                                               ",\"speed\":" + line.substring(firstComma + 1, secondComma) + 
-                                              ",\"distance\":" + line.substring(secondComma + 1) + "}"; // Odległość w metrach
+                                              ",\"distance\":" + line.substring(secondComma + 1, thirdComma) + 
+                                              ",\"latitude\":" + line.substring(thirdComma + 1, fourthComma) +
+                                              ",\"longitude\":" + line.substring(fourthComma + 1) + "}"; 
                               hasData = true;
                           }
                       }
@@ -259,9 +275,10 @@ void configureGNSS() {
 }
 
 // Dodawanie danych do bufora przed zapisem do pliku
-void addDataToBuffer(unsigned long timestamp, float speed, float distance_meters) {
-  // Format: timestamp_s,speed_kmh,distance_m
-  measurementDataBuffer += String(timestamp) + "," + String(speed, 2) + "," + String((int)round(distance_meters)) + "\n";
+// speed_for_log: to jest faktyczna prędkość odczytana z GNSS, bez zaokrąglania do zera dla wyświetlania
+void addDataToBuffer(unsigned long timestamp, float speed_for_log, float distance_meters, float lat, float lng) {
+  // Format: timestamp_s,speed_kmh,distance_m,latitude,longitude
+  measurementDataBuffer += String(timestamp) + "," + String(speed_for_log, 2) + "," + String((int)round(distance_meters)) + "," + String(lat, 6) + "," + String(lng, 6) + "\n";
 }
 
 // Zapis bufora do pliku SPIFFS
@@ -293,8 +310,8 @@ void readBatteryVoltage() {
       rawADC_sum += analogRead(BATTERY_PIN);
       delayMicroseconds(10); 
   }
-  float rawADC = rawADC_sum / numReadings;
-  currentBatteryVoltage = rawADC * (3.3f / 4095.0f) * 2.0f; 
+  float rawADC = rawADC_sum * (3.3f / 4095.0f) * 2.0f / numReadings; // Skorygowane dzielenie przez numReadings
+  currentBatteryVoltage = rawADC;
   Serial.print("[BATT] Odczyt baterii: "); Serial.print(currentBatteryVoltage, 2); Serial.println("V");
 }
 
@@ -428,34 +445,49 @@ void loop() {
         if (gnss.location.age() > MAX_FIX_AGE_MS) {
           Serial.println("[GNSS WARNING] Stare dane GNSS, pomijam. Wiek: " + String(gnss.location.age()) + " ms.");
         } else {
-            float currentSpeedKmh = gnss.speed.kmph();
-            if (currentSpeedKmh < 0.3) currentSpeedKmh = 0; 
+            float currentLat = gnss.location.lat();
+            float currentLng = gnss.location.lng();
+            float rawSpeedKmh = gnss.speed.kmph(); // Surowa prędkość
+            
+            float displaySpeedKmh = rawSpeedKmh; // Prędkość do wyświetlania/BLE notify
+            if (displaySpeedKmh < 0.3) displaySpeedKmh = 0; // Ogranicz do 0 dla wyświetlania
 
-            if (currentSpeedKmh > maxSpeed) maxSpeed = currentSpeedKmh;
-            sumSpeed += currentSpeedKmh;
-            speedCount++;
-
-            float delta = 0; 
-            if (lastLat != 0.0 || lastLng != 0.0) {
-              delta = TinyGPSPlus::distanceBetween(lastLat, lastLng, gnss.location.lat(), gnss.location.lng());
-            }
-            // Serial.print("[GNSS DEBUG] Obliczona Delta: "); Serial.print(delta, 6); Serial.println(" m"); // Odkomentuj tylko do debugowania
-
-            if (delta > MIN_DISTANCE_M && currentSpeedKmh >= MIN_SPEED_KMH && gnss.satellites.isValid() && gnss.satellites.value() >= MIN_SATS && gnss.hdop.isValid() && gnss.hdop.hdop() < MAX_HDOP) {
-              distance_km += delta / 1000.0; 
-              // Serial.print("[GNSS DEBUG] Dystans akumulowany. Delta: "); Serial.print(delta, 3); Serial.print(" m, Akumulowany dystans: "); Serial.print(distance_km, 3); Serial.println(" km"); // Odkomentuj tylko do debugowania
+            if (!hasFirstFixForDistance) {
+                // To jest pierwsza ważna poprawka od startu/resetu logowania
+                // Inicjalizujemy ostatnie znane współrzędne, ale nie obliczamy dystansu jeszcze
+                lastLat = currentLat;
+                lastLng = currentLng;
+                hasFirstFixForDistance = true;
+                Serial.println("[GNSS DEBUG] Pierwsza poprawka GPS do obliczania dystansu zarejestrowana.");
             } else {
-              // Serial.print("[GNSS DEBUG] Dystans NIE akumulowany. Delta: "); Serial.print(delta, 3); Serial.print(" m (Min: "); Serial.print(MIN_DISTANCE_M, 2);
-              // Serial.print("), Prędkość: "); Serial.print(currentSpeedKmh, 2); Serial.print(" (Min: "); Serial.print(MIN_SPEED_KMH, 2);
-              // Serial.print("), Sat: "); Serial.print(gnss.satellites.isValid() ? gnss.satellites.value() : 0); Serial.print(" (Min: "); Serial.print(MIN_SATS);
-              // Serial.print("), HDOP: "); Serial.print(gnss.hdop.isValid() ? gnss.hdop.hdop() : 99.9, 2); Serial.print(" (Max: "); Serial.print(MAX_HDOP, 2); Serial.println(")"); // Odkomentuj tylko do debugowania
-            }
+                float delta = TinyGPSPlus::distanceBetween(lastLat, lastLng, currentLat, currentLng);
+                Serial.print("[GNSS DEBUG] Obliczona Delta: "); Serial.print(delta, 6); Serial.println(" m");
 
-            lastLat = gnss.location.lat();
-            lastLng = gnss.location.lng();
+                // Warunki akumulacji dystansu (używamy surowej prędkości dla warunku, aby nie pomijać małych ruchów)
+                bool shouldAccumulate = (delta > MIN_DISTANCE_M) &&
+                                        (rawSpeedKmh >= MIN_SPEED_KMH) && // Używaj rawSpeedKmh tutaj
+                                        gnss.satellites.isValid() && (gnss.satellites.value() >= MIN_SATS) &&
+                                        gnss.hdop.isValid() && (gnss.hdop.hdop() < MAX_HDOP);
+
+                if (shouldAccumulate) {
+                    distance_km += delta / 1000.0; 
+                    Serial.print("[GNSS DEBUG] Dystans akumulowany. Delta: "); Serial.print(delta, 3); Serial.print(" m, Akumulowany dystans: "); Serial.print(distance_km, 3); Serial.println(" km");
+                } else {
+                    Serial.print("[GNSS DEBUG] Dystans NIE akumulowany. Powód: ");
+                    if (delta <= MIN_DISTANCE_M) Serial.print("Delta za mała ("); Serial.print(delta, 3); Serial.print("m <= "); Serial.print(MIN_DISTANCE_M, 2); Serial.print("m) | ");
+                    if (rawSpeedKmh < MIN_SPEED_KMH) Serial.print("Prędkość za niska ("); Serial.print(rawSpeedKmh, 2); Serial.print("km/h < "); Serial.print(MIN_SPEED_KMH, 2); Serial.print("km/h) | ");
+                    if (!gnss.satellites.isValid() || gnss.satellites.value() < MIN_SATS) Serial.print("Brak satelitów lub za mało ("); Serial.print(gnss.satellites.isValid() ? gnss.satellites.value() : 0); Serial.print(" < "); Serial.print(MIN_SATS); Serial.print(") | ");
+                    if (!gnss.hdop.isValid() || gnss.hdop.hdop() >= MAX_HDOP) Serial.print("HDOP za wysoki ("); Serial.print(gnss.hdop.isValid() ? gnss.hdop.hdop() : 99.9, 2); Serial.print(" >= "); Serial.print(MAX_HDOP, 2); Serial.print(") | ");
+                    Serial.println();
+                }
+                // Zawsze aktualizuj ostatnie współrzędne PO obliczeniu delty, aby były gotowe na następny punkt
+                lastLat = currentLat;
+                lastLng = currentLng;
+            }
 
             if (loggingActive) {
-              addDataToBuffer(millis() / 1000, currentSpeedKmh, distance_km * 1000); 
+                // Zapisuj surową prędkość do pliku logu
+                addDataToBuffer(millis() / 1000, rawSpeedKmh, distance_km * 1000, currentLat, currentLng); 
             }
         }
       }
@@ -473,7 +505,7 @@ void loop() {
       lastBleNotifyMillis = millis(); 
 
       float currentSpeedKmh = gnss.speed.isValid() ? gnss.speed.kmph() : 0.0;
-      if (currentSpeedKmh < 0.3) currentSpeedKmh = 0; 
+      if (currentSpeedKmh < 0.3) currentSpeedKmh = 0; // Ta zmienna jest tylko do bieżącego wyświetlania/BLE notify
 
       float avgSpeed = speedCount > 0 ? sumSpeed / speedCount : 0.0;
 
@@ -497,7 +529,7 @@ void loop() {
       json += "\"altitude\":" + (gnss.altitude.isValid() ? String(gnss.altitude.meters()) : "0") + ",";
       json += "\"satellites\":" + String(sats) + ",";
       json += "\"hdop\":" + (gnss.hdop.isValid() ? String(hdop, 2) : "0") + ",";
-      json += "\"currentSpeed\":" + String(currentSpeedKmh, 2) + ",";
+      json += "\"currentSpeed\":" + String(currentSpeedKmh, 2) + ","; // Tutaj używamy oczyszczonej prędkości
       json += "\"maxSpeed\":" + String(maxSpeed, 2) + ",";
       json += "\"avgSpeed\":" + String(avgSpeed, 2) + ",";
       json += "\"distance\":" + String(distance_km, 3) + ","; 

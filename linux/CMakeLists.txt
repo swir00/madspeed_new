@@ -4,17 +4,10 @@ project(runner LANGUAGES CXX)
 
 # The name of the executable created for the application. Change this to change
 # the on-disk name of your application.
-<<<<<<< HEAD
 set(BINARY_NAME "madspeed_new")
 # The unique GTK application identifier for this application. See:
 # https://wiki.gnome.org/HowDoI/ChooseApplicationID
 set(APPLICATION_ID "com.example.madspeed_new")
-=======
-set(BINARY_NAME "madspeed_app")
-# The unique GTK application identifier for this application. See:
-# https://wiki.gnome.org/HowDoI/ChooseApplicationID
-set(APPLICATION_ID "com.example.madspeed_app")
->>>>>>> 453f572e89beca443a1d48bec0e29d104017f543
 
 # Explicitly opt in to modern CMake behaviors to avoid warnings with recent
 # versions of CMake.

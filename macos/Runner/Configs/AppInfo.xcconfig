@@ -5,17 +5,10 @@
 // 'flutter create' template.
 
 // The application's name. By default this is also the title of the Flutter window.
-<<<<<<< HEAD
 PRODUCT_NAME = madspeed_new
 
 // The application's bundle identifier
 PRODUCT_BUNDLE_IDENTIFIER = com.example.madspeedNew
-=======
-PRODUCT_NAME = madspeed_app
-
-// The application's bundle identifier
-PRODUCT_BUNDLE_IDENTIFIER = com.example.madspeedApp
->>>>>>> 453f572e89beca443a1d48bec0e29d104017f543
 
 // The copyright displayed in application information
 PRODUCT_COPYRIGHT = Copyright © 2025 com.example. All rights reserved.

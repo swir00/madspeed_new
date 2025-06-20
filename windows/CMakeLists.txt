@@ -1,18 +1,10 @@
 # Project-level configuration.
 cmake_minimum_required(VERSION 3.14)
-<<<<<<< HEAD
 project(madspeed_new LANGUAGES CXX)
 
 # The name of the executable created for the application. Change this to change
 # the on-disk name of your application.
 set(BINARY_NAME "madspeed_new")
-=======
-project(madspeed_app LANGUAGES CXX)
-
-# The name of the executable created for the application. Change this to change
-# the on-disk name of your application.
-set(BINARY_NAME "madspeed_app")
->>>>>>> 453f572e89beca443a1d48bec0e29d104017f543
 
 # Explicitly opt in to modern CMake behaviors to avoid warnings with recent
 # versions of CMake.

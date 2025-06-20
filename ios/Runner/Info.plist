@@ -2,19 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-<<<<<<< HEAD
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
 	<string>Madspeed New</string>
-=======
-	<key>CADisableMinimumFrameDurationOnPhone</key>
-	<true/>
-	<key>CFBundleDevelopmentRegion</key>
-	<string>$(DEVELOPMENT_LANGUAGE)</string>
-	<key>CFBundleDisplayName</key>
-	<string>Madspeed App</string>
->>>>>>> 453f572e89beca443a1d48bec0e29d104017f543
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -22,11 +13,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-<<<<<<< HEAD
 	<string>madspeed_new</string>
-=======
-	<string>madspeed_app</string>
->>>>>>> 453f572e89beca443a1d48bec0e29d104017f543
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -37,21 +24,6 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
-<<<<<<< HEAD
-=======
-	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>Aplikacja MadSpeed potrzebuje dostępu do Bluetooth, aby skanować i łączyć się z Twoimi urządzeniami MadSpeed (np. do odczytu danych prędkości i dystansu)</string>
-	<key>NSBluetoothPeripheralUsageDescription</key>
-	<string>Aplikacja MadSpeed potrzebuje dostępu do Bluetooth, aby połączyć się z Twoimi urządzeniami MadSpeed i wymieniać dane.</string>
-	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Aplikacja MadSpeed wymaga dostępu do lokalizacji, aby wykrywać urządzenia Bluetooth Low Energy (BLE) w pobliżu, nawet jeśli nie używa danych GPS.</string>
-	<key>UIApplicationSupportsIndirectInputEvents</key>
-	<true/>
-	<key>UIBackgroundModes</key>
-	<array>
-		<string>bluetooth-central</string>
-	</array>
->>>>>>> 453f572e89beca443a1d48bec0e29d104017f543
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>
@@ -69,12 +41,9 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
-<<<<<<< HEAD
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
-=======
->>>>>>> 453f572e89beca443a1d48bec0e29d104017f543
 </dict>
 </plist>

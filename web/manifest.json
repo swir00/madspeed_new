@@ -1,11 +1,6 @@
 {
-<<<<<<< HEAD
     "name": "madspeed_new",
     "short_name": "madspeed_new",
-=======
-    "name": "madspeed_app",
-    "short_name": "madspeed_app",
->>>>>>> 453f572e89beca443a1d48bec0e29d104017f543
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",

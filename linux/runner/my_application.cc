@@ -40,19 +40,11 @@ static void my_application_activate(GApplication* application) {
   if (use_header_bar) {
     GtkHeaderBar* header_bar = GTK_HEADER_BAR(gtk_header_bar_new());
     gtk_widget_show(GTK_WIDGET(header_bar));
-<<<<<<< HEAD
     gtk_header_bar_set_title(header_bar, "madspeed_new");
     gtk_header_bar_set_show_close_button(header_bar, TRUE);
     gtk_window_set_titlebar(window, GTK_WIDGET(header_bar));
   } else {
     gtk_window_set_title(window, "madspeed_new");
-=======
-    gtk_header_bar_set_title(header_bar, "madspeed_app");
-    gtk_header_bar_set_show_close_button(header_bar, TRUE);
-    gtk_window_set_titlebar(window, GTK_WIDGET(header_bar));
-  } else {
-    gtk_window_set_title(window, "madspeed_app");
->>>>>>> 453f572e89beca443a1d48bec0e29d104017f543
   }
 
   gtk_window_set_default_size(window, 1280, 720);

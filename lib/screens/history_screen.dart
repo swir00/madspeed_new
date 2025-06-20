@@ -3,6 +3,7 @@ import 'package:madspeed_app/models/speed_master_session.dart';
 import 'package:madspeed_app/models/training_session.dart';
 import 'package:madspeed_app/widgets/custom_chart.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:madspeed_app/screens/map_view_screen.dart'; // Import nowego ekranu mapy
 
 class HistoryScreen extends StatefulWidget {
   const HistoryScreen({super.key});
@@ -82,6 +83,7 @@ class _HistoryScreenState extends State<HistoryScreen> with SingleTickerProvider
           TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Anuluj')),
           ElevatedButton(onPressed: () => Navigator.of(context).pop(true), child: const Text('Usuń')),
         ],
+        backgroundColor: Theme.of(context).cardColor, // Ensure consistent theming
       ),
     );
     if (confirm == true) {
@@ -198,6 +200,26 @@ class _HistoryScreenState extends State<HistoryScreen> with SingleTickerProvider
                               SizedBox(
                                 height: 200, // Fixed height for the chart in history
                                 child: CustomChart(logData: session.logData),
+                              ),
+                              const SizedBox(height: 10), // Odstęp przed przyciskiem mapy
+                              Align(
+                                alignment: Alignment.center,
+                                child: ElevatedButton.icon(
+                                  icon: const Icon(Icons.map),
+                                  label: const Text('Pokaż na Mapie'),
+                                  onPressed: () {
+                                    // Nawiguj do ekranu mapy, przekazując dane logu
+                                    Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (context) => MapViewScreen(
+                                          logData: session.logData,
+                                          sessionName: session.name,
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                ),
                               ),
                             ],
                             Align(

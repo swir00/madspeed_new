@@ -20,26 +20,7 @@ const gpsSignalEl = document.getElementById('gps-signal'),
     panYSlider = document.getElementById('pan-y-slider'),
     bars = Array.from(gpsSignalEl.querySelectorAll('.bar'));
 
-// --- Nowe elementy dla menu hamburger i ustawień ---
-const hamburgerButton = document.querySelector('.hamburger'),
-    mainNav = document.querySelector('.main-nav'),
-    navButtons = document.querySelectorAll('.nav-button'),
-    mainSection = document.getElementById('main-section'),
-    settingsSection = document.getElementById('settings-section'),
-    spiffsTotalEl = document.getElementById('spiffs-total'),
-    spiffsUsedEl = document.getElementById('spiffs-used'),
-    spiffsPercentEl = document.getElementById('spiffs-percent'),
-    spiffsProgressBar = document.getElementById('spiffs-progress-bar'),
-    wifiSsidPrefixInput = document.getElementById('wifi-ssid-prefix'),
-    wifiSsidMacSuffixSpan = document.getElementById('wifi-ssid-mac-suffix'),
-    wifiPasswordPrefixInput = document.getElementById('wifi-password-prefix'),
-    wifiPasswordMacSuffixSpan = document.getElementById('wifi-password-mac-suffix'),
-    wifiSettingsForm = document.getElementById('wifi-settings-form'),
-    wifiStatusMessage = document.getElementById('wifi-status-message');
-
-
 let liveDataInterval,
-    settingsDataInterval, // Nowy interwał dla danych ustawień
     allChartData = [],
     fullXRange = {
         min: 0,
@@ -128,136 +109,20 @@ const ctx = document.getElementById('speedChart').getContext('2d'),
         }
     });
 
-// --- NOWA FUNKCJA: Przełączanie sekcji ---
-function showSection(sectionId) {
-    // Ukryj wszystkie sekcje zawartości
-    const sections = document.querySelectorAll('.content-section');
-    sections.forEach(section => {
-        section.classList.remove('active');
-    });
-
-    // Pokaż wybraną sekcję
-    document.getElementById(sectionId).classList.add('active');
-
-    // Aktywuj przycisk nawigacyjny
-    navButtons.forEach(button => {
-        button.classList.remove('active');
-        if (button.dataset.section === sectionId) {
-            button.classList.add('active');
-        }
-    });
-
-    // Zamknij menu hamburgera po wybraniu sekcji (na małych ekranach)
-    if (window.innerWidth < 600) { // Dopasuj do breakpointu w CSS
-        mainNav.classList.remove('is-active');
-        hamburgerButton.classList.remove('is-active');
-    }
-
-    // Włącz/wyłącz interwały odświeżania w zależności od aktywnej sekcji
-    if (sectionId === 'main-section') {
-        if (!liveDataInterval) {
-            liveDataInterval = setInterval(fetchAndUpdateLiveData, 1000);
-            fetchAndUpdateLiveData(); // Odśwież natychmiast po włączeniu
-        }
-        if (settingsDataInterval) {
-            clearInterval(settingsDataInterval);
-            settingsDataInterval = null;
-        }
-    } else if (sectionId === 'settings-section') {
-        if (liveDataInterval) {
-            clearInterval(liveDataInterval);
-            liveDataInterval = null;
-        }
-        if (!settingsDataInterval) {
-            settingsDataInterval = setInterval(fetchSettingsData, 2000); // Odświeżaj ustawienia rzadziej
-            fetchSettingsData(); // Odśwież natychmiast po włączeniu
-        }
-    }
-}
-
-// --- NOWA FUNKCJA: Pobieranie i aktualizacja danych ustawień ---
-async function fetchSettingsData() {
-    try {
-        const response = await fetch('/settings');
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-        const data = await response.json();
-        
-        // Aktualizacja danych SPIFFS
-        updateSpiffsDisplay(data.spiffsTotal, data.spiffsUsed);
-
-        // Aktualizacja pól Wi-Fi
-        const currentSsid = data.currentSsid || '';
-        const currentPassword = data.currentPassword || '';
-        const macSuffix = data.macAddressSuffix || ''; // Upewnij się, że ESP32 to wysyła
-
-        wifiSsidMacSuffixSpan.textContent = macSuffix;
-        wifiPasswordMacSuffixSpan.textContent = macSuffix;
-
-        // Ustaw prefiksy na podstawie pełnego SSID/hasła
-        // Jeśli pełne SSID zawiera sufiks MAC, wytnij prefix. W przeciwnym razie użyj całego SSID.
-        if (currentSsid.endsWith(macSuffix) && macSuffix.length > 0) {
-            wifiSsidPrefixInput.value = currentSsid.substring(0, currentSsid.length - macSuffix.length);
-        } else {
-            wifiSsidPrefixInput.value = currentSsid;
-        }
-        
-        if (currentPassword.endsWith(macSuffix) && macSuffix.length > 0) {
-            wifiPasswordPrefixInput.value = currentPassword.substring(0, currentPassword.length - macSuffix.length);
-        } else {
-            wifiPasswordPrefixInput.value = currentPassword;
-        }
-
-    } catch (error) {
-        console.error('[fetchSettingsData] Błąd pobierania danych ustawień:', error);
-        spiffsTotalEl.textContent = '-- MB';
-        spiffsUsedEl.textContent = '-- MB';
-        spiffsPercentEl.textContent = '--%';
-        spiffsProgressBar.style.width = '0%';
-        spiffsProgressBar.classList.remove('low', 'medium', 'high');
-        
-        wifiSsidPrefixInput.value = '';
-        wifiSsidMacSuffixSpan.textContent = '';
-        wifiPasswordPrefixInput.value = '';
-        wifiPasswordMacSuffixSpan.textContent = '';
-    }
-}
-
-// --- NOWA FUNKCJA: Aktualizacja wyświetlania pamięci SPIFFS ---
-function updateSpiffsDisplay(totalBytes, usedBytes) {
-    const totalMB = (totalBytes / (1024 * 1024)).toFixed(2);
-    const usedMB = (usedBytes / (1024 * 1024)).toFixed(2);
-    const percentUsed = totalBytes > 0 ? ((usedBytes / totalBytes) * 100).toFixed(0) : 0;
-
-    spiffsTotalEl.textContent = `${totalMB} MB`;
-    spiffsUsedEl.textContent = `${usedMB} MB`;
-    spiffsPercentEl.textContent = `${percentUsed}%`;
-
-    spiffsProgressBar.style.width = `${percentUsed}%`;
-    spiffsProgressBar.classList.remove('low', 'medium', 'high');
-    if (percentUsed >= 90) {
-        spiffsProgressBar.classList.add('low'); // Czerwony dla >90%
-    } else if (percentUsed >= 70) {
-        spiffsProgressBar.classList.add('medium'); // Żółty dla >70%
-    } else {
-        spiffsProgressBar.classList.add('high'); // Zielony dla <70%
-    }
-}
-
-
+// --- NOWA FUNKCJA: Parsowanie danych CSV ---
 function parseCsv(csvText) {
-    const lines = csvText.split('\n').filter(line => line.trim() !== '');
+    const lines = csvText.split('\n').filter(line => line.trim() !== ''); // Usuń puste linie
     const data = [];
 
-    if (lines.length > 1) {
+    if (lines.length > 1) { // Sprawdź, czy są dane poza nagłówkiem
+        // Pomijamy nagłówek (pierwszą linię), która powinna być "Timestamp_s,Speed_kmh,Distance_m"
         for (let i = 1; i < lines.length; i++) {
             const parts = lines[i].split(',');
-            if (parts.length === 3) {
+            if (parts.length === 3) { // Oczekujemy 3 kolumn: Timestamp, Speed, Distance
                 data.push({
                     timestamp: parseInt(parts[0]),
                     speed: parseFloat(parts[1]),
-                    distance: parseInt(parts[2])
+                    distance: parseInt(parts[2]) // Distance w metrach
                 });
             } else {
                 console.warn(`[parseCsv] Pomięto wiersz o nieprawidłowej liczbie kolumn: ${lines[i]}`);
@@ -268,6 +133,7 @@ function parseCsv(csvText) {
 }
 
 function updateFullRangesAndSliders() {
+    console.log("[updateFullRangesAndSliders] Aktualizuję zakresy wykresu na podstawie danych.");
     if (allChartData.length === 0) {
         fullXRange = {
             min: 0,
@@ -282,16 +148,17 @@ function updateFullRangesAndSliders() {
         const speeds = allChartData.map(l => parseFloat(l.speed)).filter(s => !isNaN(s) && s >= 0);
 
         fullXRange = {
-            min: distances.length > 0 ? Math.min(...distances, 0) : 0,
+            min: distances.length > 0 ? Math.min(...distances, 0) : 0, // ensure min is not negative if all distances are positive
             max: distances.length > 0 ? Math.max(...distances, 100) : 100
         };
         fullYRange = {
-            min: speeds.length > 0 ? Math.min(...speeds, 0) : 0,
+            min: speeds.length > 0 ? Math.min(...speeds, 0) : 0, // ensure min is not negative
             max: speeds.length > 0 ? Math.max(...speeds, 10) : 10
         };
 
+        // Ensure fullYRange.max is not 0 if there's data, to prevent division by zero or collapsed scale
         if (fullYRange.max === 0 && speeds.length > 0) {
-            fullYRange.max = 10;
+            fullYRange.max = 10; // Default max if all speeds are 0
         }
     }
 
@@ -306,14 +173,16 @@ function updateFullRangesAndSliders() {
         y: 0
     };
 
-    speedChart.resetZoom();
+    speedChart.resetZoom(); // Reset zoom before applying new scales
     speedChart.options.scales.x.min = fullXRange.min;
     speedChart.options.scales.x.max = fullXRange.max;
     speedChart.options.scales.y.min = fullYRange.min;
     speedChart.options.scales.y.max = fullYRange.max;
-    speedChart.update('none');
-    applyChartPan();
+    speedChart.update('none'); // Update chart to apply new scales
+    applyChartPan(); // Re-apply pan offset if any
+    console.log("[updateFullRangesAndSliders] Nowe zakresy X:", fullXRange, "Y:", fullYRange);
 }
+
 
 function applyChartPan() {
     if (allChartData.length === 0) {
@@ -337,6 +206,7 @@ function applyChartPan() {
     let panLimitX = (fullXRange.max - fullXRange.min) / 2 - currentXRangeWidth / 2;
     let panLimitY = (fullYRange.max - fullYRange.min) / 2 - currentYRangeHeight / 2;
 
+    // Ensure pan limits are not negative or too small
     if (panLimitX < 0 || Math.abs(panLimitX) < 0.001) panLimitX = 0;
     if (panLimitY < 0 || Math.abs(panLimitY) < 0.001) panLimitY = 0;
 
@@ -358,8 +228,8 @@ function applyChartPan() {
 }
 
 function voltageToPercent(voltage) {
-    const minVoltage = 3;
-    const maxVoltage = 4.2;
+    const minVoltage = 2.5;
+    const maxVoltage = 4.0;
     let percent = (voltage - minVoltage) / (maxVoltage - minVoltage) * 100;
     return Math.min(100, Math.max(0, Math.round(percent)));
 }
@@ -385,6 +255,7 @@ async function fetchAndUpdateLiveData() {
     try {
         const response = await fetch('/data');
         if (!response.ok) {
+            console.warn(`[fetchAndUpdateLiveData] Server responded with status: ${response.status}`);
             throw new Error(`HTTP error! status: ${response.status}`);
         }
         const data = await response.json();
@@ -396,7 +267,7 @@ async function fetchAndUpdateLiveData() {
         maxSpeedEl.textContent = `${data.maxSpeed.toFixed(1)} km/h`;
         avgSpeedEl.textContent = `${data.avgSpeed.toFixed(1)} km/h`;
         currentSpeedEl.textContent = `${data.currentSpeed.toFixed(1)} km/h`;
-        const distanceMeters = Math.round(data.distance * 1000);
+        const distanceMeters = Math.round(data.distance * 1000); // convert km to meters
         distanceEl.textContent = `${distanceMeters} m`;
         loggingStatusEl.textContent = data.isLoggingActive ? "Aktywne (nagrywanie)" : "Nieaktywne";
 
@@ -414,29 +285,43 @@ async function fetchAndUpdateLiveData() {
 
 async function processLogDataAndDrawChart(showAlertOnError = false) {
     try {
-        const response = await fetch('/download_csv');
+        console.log("[processLogDataAndDrawChart] Pobieranie danych logu dla wykresu...");
+        // *** KLUCZOWA ZMIANA: Poprawny URL do endpointu CSV ***
+        const response = await fetch('/download_csv'); 
+        console.log(`[processLogDataAndDrawChart] Status odpowiedzi z /download_csv: ${response.status}`);
+
         if (!response.ok) {
             const errorText = await response.text();
+            console.error(`[processLogDataAndDrawChart] Błąd odpowiedzi serwera dla /download_csv: ${response.status}. Response: ${errorText}`);
             if (showAlertOnError) {
                 alert("Nie udało się pobrać danych logu dla wykresu. Sprawdź połączenie z ESP32 i logi w konsoli deweloperskiej. Szczegóły w konsoli.");
             }
             throw new Error(`HTTP error! status: ${response.status}. Response: ${errorText}`);
         }
 
+        // *** KLUCZOWA ZMIANA: Użycie .text() do pobrania CSV i ręczne parsowanie ***
         const csvText = await response.text();
-        allChartData = parseCsv(csvText);
+        console.log("[processLogDataAndDrawChart] Odebrano dane CSV. Parsowanie...");
+        allChartData = parseCsv(csvText); 
+        console.log(`[processLogDataAndDrawChart] Dane CSV sparsowane pomyślnie. Liczba wpisów: ${allChartData.length}`);
+
+        if (allChartData.length > 0) {
+            console.log("[processLogDataAndDrawChart] Pierwsze 5 surowych wpisów:", allChartData.slice(0, 5));
+            console.log("[processLogDataAndDrawChart] Ostatnie 5 surowych wpisów:", allChartData.slice(-5));
+        }
 
         speedChart.data.labels = [];
         speedChart.data.datasets[0].data = [];
 
         let lastDistance = -1;
         let lastSpeed = -1;
-        const MIN_DISTANCE_DIFF = 1;
-        const MIN_SPEED_DIFF = 0.5;
+        const MIN_DISTANCE_DIFF = 1; // Minimalna zmiana dystansu (m) do dodania punktu
+        const MIN_SPEED_DIFF = 0.5; // Minimalna zmiana prędkości (km/h) do dodania punktu
 
         if (allChartData.length === 0) {
             console.warn("[processLogDataAndDrawChart] Otrzymano puste dane z serwera. Wykres będzie pusty.");
         } else {
+            let filteredPointsCount = 0;
             allChartData.forEach(entry => {
                 const distance = parseInt(entry.distance);
                 const speed = parseFloat(entry.speed);
@@ -450,15 +335,29 @@ async function processLogDataAndDrawChart(showAlertOnError = false) {
                     speedChart.data.datasets[0].data.push(speed);
                     lastDistance = distance;
                     lastSpeed = speed;
+                    filteredPointsCount++;
+                } else {
+                    console.log(`[processLogDataAndDrawChart] Punkt odrzucony (dystans: ${distance}, prędkość: ${speed}). Kryteria: D:${(distance - lastDistance).toFixed(2)}m (min ${MIN_DISTANCE_DIFF}m), S:${(speed - lastSpeed).toFixed(2)}km/h (min ${MIN_SPEED_DIFF}km/h)`);
                 }
             });
+
+            console.log(`[processLogDataAndDrawChart] Całkowita liczba punktów w surowych danych: ${allChartData.length}`);
+            console.log(`[processLogDataAndDrawChart] Liczba punktów dodanych do wykresu po filtracji: ${filteredPointsCount}`);
+
+
+            if (speedChart.data.labels.length === 0) {
+                console.warn("[processLogDataAndDrawChart] Po filtrowaniu wykres jest pusty. Dane logu nie spełniają kryteriów filtracji.");
+            } else {
+                console.log(`[processLogDataAndDrawChart] Wykres zaktualizowany. Liczba punktów: ${speedChart.data.labels.length}.`);
+            }
         }
 
         updateFullRangesAndSliders();
         speedChart.update();
+        console.log(`[processLogDataAndDrawChart] Dane logu pobrane i naniesione na wykres. Liczba punktów na wykresie: ${speedChart.data.labels.length}`);
 
     } catch (error) {
-        console.error('[processLogDataAndDrawChart] Błąd pobierania logu lub parsowania CSV:', error);
+        console.error('[processLogDataAndDrawChart] Błąd pobierania logu lub parsowania CSV:', error); // Zmieniono komunikat błędu
         if (showAlertOnError && !error.message.includes("HTTP error!")) {
             alert("Wystąpił błąd podczas przetwarzania danych logu. Sprawdź konsolę deweloperską.");
         }
@@ -524,6 +423,7 @@ resetZoomBtn.addEventListener('click', (() => {
     panXSlider.value = 0;
     panYSlider.value = 0;
     applyChartPan();
+    console.log("[resetZoomBtn] Wykres i suwaki zresetowane.");
 }));
 
 // Pan Sliders
@@ -568,7 +468,7 @@ panYSlider.addEventListener('touchend', () => {
 
 function animateSliderToZero(slider) {
     const startValue = parseInt(slider.value);
-    const duration = 200;
+    const duration = 200; // milliseconds
     const startTime = performance.now();
 
     function easeOutCubic(t) {
@@ -583,7 +483,7 @@ function animateSliderToZero(slider) {
         if (progress < 1) {
             requestAnimationFrame(animate);
         } else {
-            slider.value = 0;
+            slider.value = 0; // Ensure it ends exactly at 0
         }
     }
     requestAnimationFrame(animate);
@@ -593,18 +493,20 @@ function animateSliderToZero(slider) {
 // Button Event Listeners
 startBtn.addEventListener('click', async () => {
     try {
+        console.log("[startBtn] Wysyłam komendę START do ESP32.");
         const response = await fetch('/start', {
             method: 'POST'
         });
         if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
+        console.log("[startBtn] Komenda START wysłana pomyślnie.");
         speedChart.data.labels = [];
         speedChart.data.datasets[0].data = [];
         speedChart.update('none');
         allChartData = [];
         updateFullRangesAndSliders();
-        fetchAndUpdateLiveData();
+        fetchAndUpdateLiveData(); // Odśwież dane na żywo od razu
     } catch (error) {
         console.error("[startBtn] Nie udało się wysłać komendy START:", error);
         alert("Nie udało się rozpocząć nagrywania. Sprawdź połączenie z ESP32.");
@@ -613,18 +515,23 @@ startBtn.addEventListener('click', async () => {
 
 stopBtn.addEventListener('click', async () => {
     try {
+        console.log("[stopBtn] Wysyłam komendę STOP do ESP32.");
         const response = await fetch('/stop', {
             method: 'POST'
         });
         if (!response.ok) {
             const errorText = await response.text();
+            console.error(`[stopBtn] Błąd odpowiedzi serwera dla /stop: ${response.status}. Response: ${errorText}`);
             throw new Error(`HTTP error! status: ${response.status}. Response: ${errorText}`);
         }
+        console.log("[stopBtn] Komenda STOP wysłana pomyślnie. Dane powinny być zapisane na ESP32.");
 
+        console.log("[stopBtn] Czekam 100ms na sfinalizowanie zapisu danych...");
         await new Promise(resolve => setTimeout(resolve, 100));
 
-        await processLogDataAndDrawChart(true);
-        fetchAndUpdateLiveData();
+        console.log("[stopBtn] Wywołuję processLogDataAndDrawChart() w celu pobrania i narysowania logu...");
+        await processLogDataAndDrawChart(true); // showAlertOnError jest true, jeśli chcesz alerty tylko dla błędów
+        fetchAndUpdateLiveData(); // Odśwież dane na żywo po zakończeniu nagrywania
 
     } catch (error) {
         console.error("[stopBtn] Nie udało się zatrzymać nagrywania lub pobrać danych:", error);
@@ -637,31 +544,38 @@ stopBtn.addEventListener('click', async () => {
 resetBtn.addEventListener('click', async () => {
     if (confirm('Czy na pewno chcesz zresetować statystyki i usunąć dane logowania?')) {
         try {
+            console.log("[resetBtn] Wysyłam komendę RESET do ESP32.");
             const response = await fetch('/reset', {
                 method: 'POST'
             });
             if (!response.ok) {
                 throw new Error(`HTTP error! status: ${response.status}`);
             }
+            console.log("[resetBtn] Komenda RESET wysłana pomyślnie.");
 
+            // Resetowanie wszystkich parametrów w interfejsie użytkownika
             maxSpeedEl.textContent = `-- km/h`;
             avgSpeedEl.textContent = `-- km/h`;
             currentSpeedEl.textContent = `-- km/h`;
             distanceEl.textContent = `-- m`;
-            loggingStatusEl.textContent = "Nieaktywne";
-            updateBatteryDisplay(0);
-            updateGpsSignal(0);
+            loggingStatusEl.textContent = "Nieaktywne"; // Reset statusu logowania
+            updateBatteryDisplay(0); // Reset baterii na 0% lub domyślny
+            updateGpsSignal(0); // Reset sygnału GPS na 0
 
+            // Resetowanie wykresu i danych
             speedChart.data.labels = [];
             speedChart.data.datasets[0].data = [];
-            speedChart.update('none');
-            allChartData = [];
+            speedChart.update('none'); // Zaktualizuj wykres, aby był pusty
+            allChartData = []; // Wyczyść bufor danych
 
-            updateFullRangesAndSliders();
-            speedChart.resetZoom();
+            // Resetowanie zakresów i suwaków zoomu
+            updateFullRangesAndSliders(); // To automatycznie zresetuje zakresy do domyślnych
+            speedChart.resetZoom(); // Upewnij się, że zoom jest zresetowany
 
+            // Wywołaj odświeżanie danych na żywo, aby pobrać aktualny stan z ESP32 (np. czy logger jest naprawdę nieaktywny)
             fetchAndUpdateLiveData();
 
+            console.log("[resetBtn] Wszystkie parametry i wykres zostały zresetowane.");
         } catch (error) {
             console.error("[resetBtn] Nie udało się wysłać komendy RESET:", error);
             alert("Nie udało się zresetować danych. Sprawdź połączenie z ESP32.");
@@ -673,84 +587,19 @@ downloadCsvBtn.addEventListener('click', (() => {
     if (allChartData.length === 0) {
         console.warn("[downloadCsvBtn] Nie ma danych w pamięci przeglądarki (allChartData jest puste). Spróbuję pobrać bezpośrednio z serwera.");
     }
-    window.location.href = '/download_csv';
+    console.log("[downloadCsvBtn] Wysłano żądanie pobrania pliku CSV z serwera.");
+    window.location.href = '/download_csv'; // To wywoła pobranie pliku z ESP32
 }));
 
-// --- NOWA OBSŁUGA FORMULARZA WI-FI ---
-wifiSettingsForm.addEventListener('submit', async (event) => {
-    event.preventDefault(); // Zapobieganie domyślnej wysyłce formularza
+// Initial Data Fetching
+liveDataInterval = setInterval(fetchAndUpdateLiveData, 1000); // Odświeżaj dane na żywo co sekundę
+fetchAndUpdateLiveData(); // Pobierz dane na żywo natychmiast po załadowaniu strony
+processLogDataAndDrawChart(false); // Spróbuj załadować dane logu na start (bez alertów błędów, jeśli serwer nie jest aktywny)
 
-    const ssidPrefix = wifiSsidPrefixInput.value.trim();
-    const passwordPrefix = wifiPasswordPrefixInput.value.trim();
-    const macSuffix = wifiSsidMacSuffixSpan.textContent.trim(); // Sufiks MAC jest stały i pobierany z ESP32
-
-    if (!ssidPrefix || !passwordPrefix) {
-        showMessage(wifiStatusMessage, 'Nazwa sieci i hasło nie mogą być puste.', 'error');
-        return;
-    }
-
-    const newSsid = ssidPrefix + macSuffix;
-    const newPassword = passwordPrefix + macSuffix;
-
-    try {
-        const response = await fetch('/update_wifi_config', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ ssid: newSsid, password: newPassword })
-        });
-
-        if (!response.ok) {
-            const errorText = await response.text();
-            throw new Error(`HTTP error! status: ${response.status}. Response: ${errorText}`);
-        }
-
-        const result = await response.json();
-        if (result.success) {
-            showMessage(wifiStatusMessage, 'Ustawienia Wi-Fi zostały zapisane. ESP32 zrestartuje się.', 'success');
-            // Opcjonalnie: można dodać setTimeout na restart strony po restarcie ESP32
-            setTimeout(() => location.reload(), 5000); 
-        } else {
-            showMessage(wifiStatusMessage, `Błąd: ${result.message}`, 'error');
-        }
-    } catch (error) {
-        console.error('[wifiSettingsForm] Błąd wysyłania ustawień Wi-Fi:', error);
-        showMessage(wifiStatusMessage, `Błąd połączenia lub serwera: ${error.message}`, 'error');
-    }
-});
-
-function showMessage(element, message, type) {
-    element.textContent = message;
-    element.className = `status-message ${type}`; // Resetuj i ustaw klasy
-    element.style.display = 'block';
-    setTimeout(() => {
-        element.style.display = 'none';
-    }, 5000); // Ukryj wiadomość po 5 sekundach
-}
-
-// --- INITIALIZATION ---
+// Footer Current Year
 document.addEventListener('DOMContentLoaded', function() {
-    // Ustaw bieżący rok w stopce
     const currentYearEl = document.getElementById('current-year');
     if (currentYearEl) {
         currentYearEl.textContent = (new Date).getFullYear();
     }
-
-    // Obsługa przełączania menu hamburgera
-    hamburgerButton.addEventListener('click', () => {
-        mainNav.classList.toggle('is-active');
-        hamburgerButton.classList.toggle('is-active');
-    });
-
-    // Obsługa przełączania sekcji menu
-    navButtons.forEach(button => {
-        button.addEventListener('click', () => {
-            showSection(button.dataset.section);
-        });
-    });
-
-    // Uruchomienie domyślnej sekcji
-    showSection('main-section'); 
-    processLogDataAndDrawChart(false);
 });

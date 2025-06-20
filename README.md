@@ -1,8 +1,4 @@
-<<<<<<< HEAD
 # madspeed_new
-=======
-# madspeed_app
->>>>>>> 453f572e89beca443a1d48bec0e29d104017f543
 
 A new Flutter project.
 

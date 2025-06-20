@@ -15,11 +15,7 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "33CC10EC2044A3C60003C045"
-<<<<<<< HEAD
                BuildableName = "madspeed_new.app"
-=======
-               BuildableName = "madspeed_app.app"
->>>>>>> 453f572e89beca443a1d48bec0e29d104017f543
                BlueprintName = "Runner"
                ReferencedContainer = "container:Runner.xcodeproj">
             </BuildableReference>
@@ -35,11 +31,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "33CC10EC2044A3C60003C045"
-<<<<<<< HEAD
             BuildableName = "madspeed_new.app"
-=======
-            BuildableName = "madspeed_app.app"
->>>>>>> 453f572e89beca443a1d48bec0e29d104017f543
             BlueprintName = "Runner"
             ReferencedContainer = "container:Runner.xcodeproj">
          </BuildableReference>
@@ -74,11 +66,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "33CC10EC2044A3C60003C045"
-<<<<<<< HEAD
             BuildableName = "madspeed_new.app"
-=======
-            BuildableName = "madspeed_app.app"
->>>>>>> 453f572e89beca443a1d48bec0e29d104017f543
             BlueprintName = "Runner"
             ReferencedContainer = "container:Runner.xcodeproj">
          </BuildableReference>
@@ -95,11 +83,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "33CC10EC2044A3C60003C045"
-<<<<<<< HEAD
             BuildableName = "madspeed_new.app"
-=======
-            BuildableName = "madspeed_app.app"
->>>>>>> 453f572e89beca443a1d48bec0e29d104017f543
             BlueprintName = "Runner"
             ReferencedContainer = "container:Runner.xcodeproj">
          </BuildableReference>
