@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MADSpeed GPS Logger</title>
+    <link rel="stylesheet" href="style.css">
+    </head>
+<body>
+    <div class="container">
+        <h1>MADSpeed GPS Logger</h1>
+        <div class="data-display">
+            <p>Aktualna prędkość: <span id="currentSpeed">0.0</span> km/h</p>
+            <p>Prędkość maksymalna: <span id="maxSpeed">0.0</span> km/h</p>
+            <p>Średnia prędkość: <span id="avgSpeed">0.0</span> km/h</p>
+            <p>Przebyty dystans: <span id="totalDistance">0.0</span> m</p>
+            <p>Jakość GPS: <span id="gpsQuality">N/A</span></p>
+            <p>Napięcie baterii: <span id="batteryVoltage">0.0</span> V</p>
+        </div>
+
+        <div class="controls">
+            <button id="startButton">Start Logowania</button>
+            <button id="stopButton" disabled>Stop Logowania</button>
+            <button id="resetButton">Resetuj Statystyki</button>
+            <a id="downloadLink" href="/download_csv" download="gps_log.csv">Pobierz Log CSV</a>
+        </div>
+
+        <div class="chart-container">
+            <canvas id="speedChart"></canvas>
+        </div>
+
+        <div class="settings-section">
+            <h2>Ustawienia Wi-Fi i urządzenia</h2>
+            <div id="settingsInfo">
+                <p>Użyte miejsce na dysku: <span id="spiffsUsed">...</span> / <span id="spiffsTotal">...</span> B</p>
+                <p>Aktualne SSID: <span id="currentSsidDisplay">...</span></p>
+                <p>Aktualne Hasło: <span id="currentPasswordDisplay">...</span></p>
+                <p>Sufiks MAC Adresu: <span id="macAddressSuffixDisplay">...</span></p>
+            </div>
+            <div class="wifi-config">
+                <h3>Zmień konfigurację Wi-Fi AP</h3>
+                <label for="newSsid">Nowe SSID:</label>
+                <input type="text" id="newSsid" placeholder="Wprowadź nowe SSID">
+                <label for="newPassword">Nowe Hasło:</label>
+                <input type="password" id="newPassword" placeholder="Wprowadź nowe hasło">
+                <button id="updateWifiButton">Zapisz i Restartuj</button>
+            </div>
+            <p id="updateMessage" class="message"></p>
+        </div>
+    </div>
+
+    <script src="chart.min.js"></script>
+    <script src="chartjs-plugin-zoom.min.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>
