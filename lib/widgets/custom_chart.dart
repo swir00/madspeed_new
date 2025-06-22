@@ -14,65 +14,105 @@ class CustomChart extends StatelessWidget {
     }
 
     List<FlSpot> spots = [];
-    double lastValidDistance = 0.0;
+    double lastValidDistance = 0.0; // Śledzi ostatni prawidłowy (rosnący) dystans
 
-    for (var dataPoint in rawData) {
+    // Dodaj pierwszy punkt. Zaczynamy od 0 dystansu na osi X dla spójności wykresu.
+    if (rawData.isNotEmpty) {
+      // Upewniamy się, że początkowa prędkość też nie jest ujemna
+      spots.add(FlSpot(0.0, rawData.first.speed < 0 ? 0.0 : rawData.first.speed));
+      lastValidDistance = 0.0;
+    }
+
+    for (int i = 0; i < rawData.length; i++) {
+      final dataPoint = rawData[i];
       double currentDistanceMeters = dataPoint.distance;
-      
-      // Zabezpieczenie przed wstecznym dystansem
-      if (currentDistanceMeters >= lastValidDistance) {
-        lastValidDistance = currentDistanceMeters;
-      } else {
+      double currentSpeed = dataPoint.speed;
+
+      // KLUCZOWA POPRAWKA 1: Zapewnienie monotonicznego wzrostu dystansu
+      if (currentDistanceMeters < lastValidDistance) {
         currentDistanceMeters = lastValidDistance;
+      } else {
+        lastValidDistance = currentDistanceMeters;
+      }
+      
+      // KLUCZOWA POPRAWKA 2: Zapewnienie, że prędkość nigdy nie jest ujemna
+      if (currentSpeed < 0) { // Jeśli prędkość jest ujemna (z błędu GPS), ustaw na 0
+        currentSpeed = 0.0;
+      }
+      // Opcjonalna filtracja: Wygładzanie bardzo niskich prędkości do zera
+      else if (currentSpeed < 0.5) { // Jeśli prędkość jest bardzo niska (szum), ustaw na 0
+         currentSpeed = 0.0;
       }
 
-      // Dodaj punkt: X=dystans (w metrach), Y=prędkość (w km/h)
-      spots.add(FlSpot(currentDistanceMeters, dataPoint.speed));
+      spots.add(FlSpot(currentDistanceMeters, currentSpeed));
     }
-    return spots;
+
+    // Usunięcie duplikatów punktów na tej samej pozycji X, biorąc ostatnią wartość Y
+    spots.sort((a, b) => a.x.compareTo(b.x));
+    List<FlSpot> uniqueSpots = [];
+    if (spots.isNotEmpty) {
+      uniqueSpots.add(spots.first);
+      for (int i = 1; i < spots.length; i++) {
+        if (spots[i].x != uniqueSpots.last.x) {
+          uniqueSpots.add(spots[i]);
+        } else {
+          uniqueSpots.last = spots[i];
+        }
+      }
+    }
+
+    return uniqueSpots;
   }
 
   @override
   Widget build(BuildContext context) {
     final List<FlSpot> spots = _getSpeedVsDistanceSpots(logData);
 
+    double minX = 0;
     double maxX = spots.isNotEmpty ? spots.map((spot) => spot.x).reduce((a, b) => a > b ? a : b) : 1.0;
+    double minY = 0;
     double maxY = spots.isNotEmpty ? spots.map((spot) => spot.y).reduce((a, b) => a > b ? a : b) : 1.0;
     
-    // Dodaj margines do osi, aby wykres nie dotykał krawędzi
-    maxX = maxX * 1.1; // 10% marginesu
-    maxY = maxY * 1.1; // 10% marginesu
+    // Dodanie marginesów do osi i zapewnienie minimalnego zakresu Y
+    maxX = maxX * 1.05;
+    maxY = maxY * 1.15;
+    
+    if (maxY < 10.0) maxY = 10.0; // Zapewnij minimalną wartość dla maxY
 
     return InteractiveViewer(
-      boundaryMargin: const EdgeInsets.all(80.0),
+      boundaryMargin: const EdgeInsets.all(20.0),
       minScale: 0.1,
-      maxScale: 4.0,
+      maxScale: 10.0,
       child: LineChart(
         LineChartData(
           gridData: const FlGridData(show: true),
           titlesData: FlTitlesData(
             bottomTitles: AxisTitles(
+              axisNameWidget: const Text('Dystans [m]', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
+              axisNameSize: 25,
               sideTitles: SideTitles(
                 showTitles: true,
                 reservedSize: 30,
+                interval: (maxX / 5 < 1) ? 1 : (maxX / 5).roundToDouble(), 
                 getTitlesWidget: (value, meta) {
-                  // Oś X: Dystans w metrach
                   return SideTitleWidget(
                     axisSide: meta.axisSide,
-                    child: Text('${value.toInt()}m', style: const TextStyle(fontSize: 12)),
+                    child: Text('${value.toInt()}', style: const TextStyle(fontSize: 12)),
                   );
                 },
               ),
             ),
             leftTitles: AxisTitles(
+              axisNameWidget: const Text('Prędkość [km/h]', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
+              axisNameSize: 25,
               sideTitles: SideTitles(
                 showTitles: true,
                 reservedSize: 40,
+                interval: (maxY / 5 < 1) ? 1 : (maxY / 5).roundToDouble(),
                 getTitlesWidget: (value, meta) {
-                  // Oś Y: Prędkość w km/h
                   return SideTitleWidget(
                     axisSide: meta.axisSide,
-                    child: Text('${value.toInt()}km/h', style: const TextStyle(fontSize: 12)),
+                    child: Text('${value.toInt()}', style: const TextStyle(fontSize: 12)),
                   );
                 },
               ),
@@ -95,10 +135,11 @@ class CustomChart extends StatelessWidget {
               belowBarData: BarAreaData(show: false),
             ),
           ],
-          minX: 0,
+          minX: minX,
           maxX: maxX,
-          minY: 0,
+          minY: minY,
           maxY: maxY,
+          lineTouchData: const LineTouchData(enabled: true),
         ),
       ),
     );

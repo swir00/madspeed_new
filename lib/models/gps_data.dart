@@ -1,16 +1,16 @@
 class GPSData {
-  final double? latitude;
-  final double? longitude;
-  final double? altitude;
-  final int? satellites;
-  final double? hdop;
-  final double? currentSpeed;
-  final double? maxSpeed;
-  final double? avgSpeed;
-  final double? distance;
-  final int? gpsQualityLevel;
-  final double? battery;
-  final bool? isLoggingActive;
+  double? latitude;
+  double? longitude;
+  double? altitude;
+  int? satellites;
+  double? hdop;
+  double? currentSpeed;
+  double? maxSpeed;
+  double? avgSpeed;
+  double? distance;
+  int? gpsQualityLevel;
+  double? battery;
+  bool? isLoggingActive;
 
   GPSData({
     this.latitude,
@@ -37,7 +37,11 @@ class GPSData {
       currentSpeed: (json['currentSpeed'] as num?)?.toDouble(),
       maxSpeed: (json['maxSpeed'] as num?)?.toDouble(),
       avgSpeed: (json['avgSpeed'] as num?)?.toDouble(),
-      distance: (json['distance'] as num?)?.toDouble(),
+      // ZMIANA TUTAJ: Bezpieczne parsowanie, jeśli ESP32 wysyłało jako string (chociaż teraz ESP32 wysyła jako liczbę)
+      // W idealnym świecie json['distance'] będzie już num, ale ta linia jest odporna.
+      distance: (json['distance'] is String)
+          ? double.tryParse(json['distance'])
+          : (json['distance'] as num?)?.toDouble(),
       gpsQualityLevel: json['gpsQualityLevel'] as int?,
       battery: (json['battery'] as num?)?.toDouble(),
       isLoggingActive: json['isLoggingActive'] as bool?,

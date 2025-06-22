@@ -5,6 +5,7 @@ import 'package:madspeed_app/screens/speed_master_screen.dart';
 import 'package:madspeed_app/screens/training_screen.dart';
 import 'package:madspeed_app/screens/history_screen.dart';
 import 'package:madspeed_app/services/ble_service.dart';
+import 'package:madspeed_app/screens/info_screen.dart';
 import 'package:provider/provider.dart';
 
 void main() {
@@ -69,6 +70,7 @@ class MyApp extends StatelessWidget {
         '/speed_master': (context) => const SpeedMasterScreen(), // Speed Master screen
         '/training': (context) => const TrainingScreen(), // Training screen
         '/history': (context) => const HistoryScreen(), // History screen for saved sessions
+        '/info': (context) => const InfoScreen(),
       },
     );
   }

@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:madspeed_app/models/gps_data.dart'; // Upewnij się, że ten import jest poprawny
 import 'package:madspeed_app/models/speed_master_session.dart';
 import 'package:madspeed_app/services/ble_service.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
+import 'package:madspeed_app/widgets/status_indicators_widget.dart'; // Dodano import
 
 class SpeedMasterScreen extends StatefulWidget {
   const SpeedMasterScreen({super.key});
@@ -23,6 +25,9 @@ class _SpeedMasterScreenState extends State<SpeedMasterScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      Provider.of<BLEService>(context, listen: false).setSpeedMasterMode();
+    });
     _loadSavedSessions();
   }
 
@@ -38,6 +43,7 @@ class _SpeedMasterScreenState extends State<SpeedMasterScreen> {
     if (sessionsJson != null) {
       setState(() {
         _savedSessions.addAll(SpeedMasterSession.decode(sessionsJson));
+        _savedSessions.sort((a, b) => b.timestamp.compareTo(a.timestamp));
       });
     }
   }
@@ -58,9 +64,12 @@ class _SpeedMasterScreenState extends State<SpeedMasterScreen> {
   void _stopMeasurement(BLEService bleService) async {
     await bleService.sendControlCommand("STOP_LOG");
 
-    _finalMaxSpeed = bleService.currentGpsData.maxSpeed ?? 0.0;
-    _finalDistance = bleService.currentGpsData.distance ?? 0.0;
-    _finalAverageSpeed = bleService.currentGpsData.avgSpeed ?? 0.0;
+    // Zbieranie finalnych danych z aktualnego stanu GPS
+    setState(() {
+      _finalMaxSpeed = bleService.currentGpsData.maxSpeed ?? 0.0;
+      _finalDistance = bleService.currentGpsData.distance ?? 0.0; // Dystans w metrach
+      _finalAverageSpeed = bleService.currentGpsData.avgSpeed ?? 0.0;
+    });
 
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -81,7 +90,7 @@ class _SpeedMasterScreenState extends State<SpeedMasterScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text('Maks. prędkość: ${_finalMaxSpeed.toStringAsFixed(2)} km/h'),
-              Text('Dystans: ${_finalDistance.toStringAsFixed(3)} km'),
+              Text('Dystans: ${_formatDistance(_finalDistance)}'), // Użyj _formatDistance
               Text('Średnia prędkość: ${_finalAverageSpeed.toStringAsFixed(2)} km/h'),
               const SizedBox(height: 15),
               TextField(
@@ -124,11 +133,11 @@ class _SpeedMasterScreenState extends State<SpeedMasterScreen> {
     }
 
     final newSession = SpeedMasterSession(
-      id: Uuid().v4(),
+      id: const Uuid().v4(),
       name: _sessionNameController.text,
       maxSpeed: _finalMaxSpeed,
-      distance: _finalDistance,
-      averageSpeed: _finalAverageSpeed,
+      distance: _finalDistance, // Dystans jest w metrach
+      averageSpeed: _finalAverageSpeed, // Średnia prędkość jest już w km/h
       timestamp: DateTime.now(),
     );
 
@@ -138,9 +147,11 @@ class _SpeedMasterScreenState extends State<SpeedMasterScreen> {
     });
     _saveSessions();
     _sessionNameController.clear();
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Wynik zapisany pomyślnie!')),
-    );
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Wynik zapisany pomyślnie!')),
+      );
+    }
   }
 
   void _resetDeviceData() {
@@ -156,12 +167,36 @@ class _SpeedMasterScreenState extends State<SpeedMasterScreen> {
     );
   }
 
+  // Funkcja do dynamicznego formatowania dystansu (skopiowana z TrainingScreen dla spójności)
+  String _formatDistance(double? distanceMeters) {
+    if (distanceMeters == null) return 'N/A';
+    
+    String valueText;
+    String unitText;
+
+    if (distanceMeters < 1000) { // Jeśli mniej niż 1 km
+      valueText = distanceMeters.toStringAsFixed(0); // Zaokrągl do całości metrów
+      unitText = 'm';
+    } else { // 1 km lub więcej
+      valueText = (distanceMeters / 1000.0).toStringAsFixed(3); // Konwertuj na km
+      unitText = 'km';
+    }
+    return '$valueText $unitText';
+  }
+
+
   @override
   Widget build(BuildContext context) {
+    final bleService = Provider.of<BLEService>(context);
+    final data = bleService.currentGpsData;
+    bool isLoggingActiveFromDevice = data.isLoggingActive ?? false;
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Speed Master'),
         actions: [
+          const StatusIndicatorsWidget(),
+          const SizedBox(width: 10),
           IconButton(
             icon: const Icon(Icons.delete_forever),
             onPressed: () async {
@@ -176,6 +211,7 @@ class _SpeedMasterScreenState extends State<SpeedMasterScreen> {
                   ],
                 ),
               );
+              if (!context.mounted) return; // Zabezpieczenie kontekstu
               if (confirm == true) {
                 setState(() {
                   _savedSessions.clear();
@@ -191,10 +227,16 @@ class _SpeedMasterScreenState extends State<SpeedMasterScreen> {
             tooltip: 'Wyczyść wszystkie zapisane wyniki',
           ),
           IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _resetDeviceData,
-            tooltip: 'Zresetuj dane na urządzeniu',
+            icon: const Icon(Icons.history), // Dodano ikonę historii
+            onPressed: () {
+              // Użyj Navigator.pushReplacementNamed, aby zastąpić bieżący ekran
+              // ekranem historii. To pomaga uniknąć błędu SingleTickerProviderStateMixin.
+              Navigator.pushReplacementNamed(context, '/history');
+            },
+            tooltip: 'Historia wyników',
           ),
+          // Usunięto zduplikowany IconButton dla resetu danych urządzenia z AppBar,
+          // ponieważ jest już w akcjach pod kartą "Aktualny pomiar"
         ],
       ),
       body: SingleChildScrollView(
@@ -211,18 +253,12 @@ class _SpeedMasterScreenState extends State<SpeedMasterScreen> {
                   child: Consumer<BLEService>(
                     builder: (context, bleService, child) {
                       final data = bleService.currentGpsData;
-                      bool isLoggingActiveFromDevice = data.isLoggingActive ?? false;
-                      double batteryPercentage = bleService.batteryPercentage; // Pobierz procent baterii
-
+                      // bool isLoggingActiveFromDevice = data.isLoggingActive ?? false; // Używamy bezpośrednio data.isLoggingActive
+                      
                       return Column(
                         children: [
                           Text('Aktualny pomiar', style: Theme.of(context).textTheme.headlineSmall),
                           const SizedBox(height: 10),
-                          _buildMeasurementRow(
-                            'Prędkość:',
-                            '${data.currentSpeed?.toStringAsFixed(2) ?? 'N/A'}',
-                            'km/h',
-                          ),
                           _buildMeasurementRow(
                             'Maks. prędkość:',
                             '${data.maxSpeed?.toStringAsFixed(2) ?? 'N/A'}',
@@ -230,8 +266,8 @@ class _SpeedMasterScreenState extends State<SpeedMasterScreen> {
                           ),
                           _buildMeasurementRow(
                             'Dystans:',
-                            '${data.distance?.toStringAsFixed(3) ?? 'N/A'}',
-                            'km',
+                            _formatDistance(data.distance), // Użyj _formatDistance
+                            '', // Jednostka jest już w _formatDistance
                           ),
                           _buildMeasurementRow(
                             'Średnia prędkość:',
@@ -240,18 +276,18 @@ class _SpeedMasterScreenState extends State<SpeedMasterScreen> {
                           ),
                           _buildMeasurementRow(
                             'Logowanie aktywne:',
-                            isLoggingActiveFromDevice ? 'Tak' : 'Nie',
+                            (data.isLoggingActive ?? false) ? 'Tak' : 'Nie', // Sprawdź isLoggingActive
                             '',
                           ),
-                          // Nowy wskaźnik baterii
-                          _buildBatteryIndicator(data.battery, batteryPercentage),
                           const SizedBox(height: 20),
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                             children: [
                               Expanded(
                                 child: ElevatedButton.icon(
-                                  onPressed: isLoggingActiveFromDevice ? null : () => _startMeasurement(bleService),
+                                  onPressed: bleService.connectedDevice != null && !(data.isLoggingActive ?? false)
+                                      ? () => _startMeasurement(bleService)
+                                      : null,
                                   icon: const Icon(Icons.play_arrow),
                                   label: const Text('Start'),
                                   style: ElevatedButton.styleFrom(
@@ -262,7 +298,9 @@ class _SpeedMasterScreenState extends State<SpeedMasterScreen> {
                               const SizedBox(width: 10),
                               Expanded(
                                 child: ElevatedButton.icon(
-                                  onPressed: isLoggingActiveFromDevice ? () => _stopMeasurement(bleService) : null,
+                                  onPressed: bleService.connectedDevice != null && (data.isLoggingActive ?? false)
+                                      ? () => _stopMeasurement(bleService)
+                                      : null,
                                   icon: const Icon(Icons.stop),
                                   label: const Text('Stop'),
                                   style: ElevatedButton.styleFrom(
@@ -292,52 +330,63 @@ class _SpeedMasterScreenState extends State<SpeedMasterScreen> {
                         ),
                       ),
                     )
-                  : Card(
-                      elevation: 5,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15.0)),
-                      child: Column(
-                        children: [
-                          Table(
-                            defaultColumnWidth: const IntrinsicColumnWidth(),
-                            border: TableBorder.all(color: Colors.grey.shade300, borderRadius: BorderRadius.circular(15)),
+                  : SingleChildScrollView( // NOWOŚĆ: Przewijanie poziome dla tabeli
+                      scrollDirection: Axis.horizontal,
+                      child: Card(
+                          elevation: 5,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15.0)),
+                          child: Column(
                             children: [
-                              TableRow(
-                                decoration: BoxDecoration(
-                                  color: Theme.of(context).primaryColor.withOpacity(0.1),
-                                  borderRadius: const BorderRadius.vertical(top: Radius.circular(15)),
-                                ),
+                              Table(
+                                defaultColumnWidth: const IntrinsicColumnWidth(), // Utrzymujemy Intrinsic, aby kolumny dopasowały się do treści
+                                border: TableBorder.all(color: Colors.grey.shade300, borderRadius: BorderRadius.circular(15)),
                                 children: [
-                                  _buildTableHeader('Nazwa'),
-                                  _buildTableHeader('Data'),
-                                  _buildTableHeader('Max Prędkość'),
-                                  _buildTableHeader('Dystans'),
-                                  _buildTableHeader('Średnia Prędkość'),
-                                  _buildTableHeader('Usuń'),
+                                  TableRow(
+                                    decoration: BoxDecoration(
+                                      color: Theme.of(context).primaryColor.withOpacity(0.1),
+                                      borderRadius: const BorderRadius.vertical(top: Radius.circular(15)),
+                                    ),
+                                    children: [
+                                      _buildTableHeader('Nazwa'),
+                                      _buildTableHeader('Data'),
+                                      _buildTableHeader('Max Prędkość'),
+                                      _buildTableHeader('Dystans'),
+                                      _buildTableHeader('Średnia Prędkość'),
+                                      _buildTableHeader('Usuń'),
+                                    ],
+                                  ),
+                                  ..._savedSessions.map((session) {
+                                    return TableRow(
+                                      children: [
+                                        _buildTableCell(session.name),
+                                        _buildTableCell('${session.timestamp.toLocal().day}.${session.timestamp.toLocal().month}.${session.timestamp.toLocal().year}'),
+                                        _buildTableCell('${session.maxSpeed.toStringAsFixed(2)} km/h'),
+                                        _buildTableCell(_formatDistance(session.distance)), // Użyj _formatDistance
+                                        _buildTableCell('${session.averageSpeed.toStringAsFixed(2)} km/h'),
+                                        TableCell(
+                                          child: IconButton(
+                                            icon: const Icon(Icons.delete, color: Colors.red),
+                                            onPressed: () => _deleteSession(session.id),
+                                            tooltip: 'Usuń sesję',
+                                          ),
+                                        ),
+                                      ],
+                                    );
+                                  }).toList(),
                                 ],
                               ),
-                              ..._savedSessions.map((session) {
-                                return TableRow(
-                                  children: [
-                                    _buildTableCell(session.name),
-                                    _buildTableCell('${session.timestamp.toLocal().day}.${session.timestamp.toLocal().month}.${session.timestamp.toLocal().year}'),
-                                    _buildTableCell('${session.maxSpeed.toStringAsFixed(2)} km/h'),
-                                    _buildTableCell('${session.distance.toStringAsFixed(3)} km'),
-                                    _buildTableCell('${session.averageSpeed.toStringAsFixed(2)} km/h'),
-                                    TableCell(
-                                      child: IconButton(
-                                        icon: const Icon(Icons.delete, color: Colors.red),
-                                        onPressed: () => _deleteSession(session.id),
-                                        tooltip: 'Usuń sesję',
-                                      ),
-                                    ),
-                                  ],
-                                );
-                              }).toList(),
+                              const SizedBox(height: 10),
+                              // Dodaj tutaj przycisk do resetowania danych na urządzeniu, jeśli potrzebujesz go w tej sekcji
+                              // Przykład:
+                              // ElevatedButton.icon(
+                              //   onPressed: bleService.connectedDevice != null ? _resetDeviceData : null,
+                              //   icon: const Icon(Icons.refresh),
+                              //   label: const Text('Resetuj dane urządzenia'),
+                              //   style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
+                              // ),
                             ],
                           ),
-                          const SizedBox(height: 10),
-                        ],
-                      ),
+                        ),
                     ),
             ],
           ),
@@ -359,66 +408,6 @@ class _SpeedMasterScreenState extends State<SpeedMasterScreen> {
               textAlign: TextAlign.right,
               style: const TextStyle(fontSize: 18),
               overflow: TextOverflow.ellipsis,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // Nowa funkcja do budowania wskaźnika baterii
-  Widget _buildBatteryIndicator(double? batteryVoltage, double batteryPercentage) {
-    if (batteryVoltage == null) {
-      return _buildMeasurementRow('Bateria:', 'N/A', '');
-    }
-
-    IconData batteryIcon;
-    Color iconColor;
-
-    if (batteryPercentage >= 90) {
-      batteryIcon = Icons.battery_full;
-      iconColor = Colors.green;
-    } else if (batteryPercentage >= 75) {
-      batteryIcon = Icons.battery_full; // battery_6_bar for > 75%
-      iconColor = Colors.green;
-    } else if (batteryPercentage >= 60) {
-      batteryIcon = Icons.battery_5_bar; // battery_5_bar for > 60%
-      iconColor = Colors.green;
-    } else if (batteryPercentage >= 45) {
-      batteryIcon = Icons.battery_4_bar; // battery_4_bar for > 45%
-      iconColor = Colors.lightGreen;
-    } else if (batteryPercentage >= 30) {
-      batteryIcon = Icons.battery_3_bar; // battery_3_bar for > 30%
-      iconColor = Colors.orange;
-    } else if (batteryPercentage >= 15) {
-      batteryIcon = Icons.battery_2_bar; // battery_2_bar for > 15%
-      iconColor = Colors.deepOrange;
-    } else if (batteryPercentage >= 5) {
-      batteryIcon = Icons.battery_1_bar; // battery_1_bar for > 5%
-      iconColor = Colors.red;
-    } else {
-      batteryIcon = Icons.battery_0_bar; // battery_0_bar for <= 5%
-      iconColor = Colors.red;
-    }
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8.0),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          const Text('Bateria:', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-          Expanded(
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.end, // Wyrównaj ikonę i tekst do prawej
-              children: [
-                Icon(batteryIcon, color: iconColor, size: 24),
-                const SizedBox(width: 8),
-                Text(
-                  '${batteryPercentage.toStringAsFixed(0)}%',
-                  textAlign: TextAlign.right,
-                  style: const TextStyle(fontSize: 18),
-                ),
-              ],
             ),
           ),
         ],
@@ -452,10 +441,11 @@ class _SpeedMasterScreenState extends State<SpeedMasterScreen> {
         content: const Text('Czy na pewno chcesz usunąć tę sesję?'),
         actions: [
           TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Anuluj')),
-          ElevatedButton(onPressed: () => Navigator.of(context).pop(true), child: const Text('Usuń')),
+          ElevatedButton(onPressed: () => Navigator.of(context).pop(true), child: const Text('Potwierdź')),
         ],
       ),
     );
+    if (!context.mounted) return; // Zabezpieczenie kontekstu
     if (confirm == true) {
       setState(() {
         _savedSessions.removeWhere((session) => session.id == id);

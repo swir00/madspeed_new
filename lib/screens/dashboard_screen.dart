@@ -1,13 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:madspeed_app/services/ble_service.dart';
-import 'package:provider/provider.dart'; // Upewnij się, że jest zaimportowany
+import 'package:provider/provider.dart';
+import 'package:madspeed_app/widgets/status_indicators_widget.dart'; // Import StatusIndicatorsWidget
 
 class DashboardScreen extends StatelessWidget {
   const DashboardScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
-    final bleService = Provider.of<BLEService>(context); // Poprawiono użycie Provider.of
+    final bleService = Provider.of<BLEService>(context);
 
     // If no device is connected, navigate back to scan screen
     if (bleService.connectedDevice == null) {
@@ -25,13 +26,9 @@ class DashboardScreen extends StatelessWidget {
       appBar: AppBar(
         title: Text('MadSpeed - Połączono z ${bleService.connectedDevice!.platformName.isNotEmpty ? bleService.connectedDevice!.platformName : "Nieznane"}'),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.history),
-            onPressed: () {
-              Navigator.pushNamed(context, '/history');
-            },
-            tooltip: 'Historia zapisanych wyników',
-          ),
+          const StatusIndicatorsWidget(), // Dodano pasek statusu
+          const SizedBox(width: 10),
+          // Przycisk "Rozłącz" pozostaje w AppBarze
           IconButton(
             icon: const Icon(Icons.exit_to_app),
             onPressed: () async {
@@ -51,41 +48,6 @@ class DashboardScreen extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.center,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: <Widget>[
-              // Current GPS Data Display (always visible on dashboard)
-              Card(
-                elevation: 5,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15.0)),
-                child: Padding(
-                  padding: const EdgeInsets.all(16.0),
-                  child: Column(
-                    children: [
-                      Text('Aktualne dane GPS:', style: Theme.of(context).textTheme.titleLarge),
-                      const SizedBox(height: 10),
-                      Consumer<BLEService>( // Poprawiono użycie Consumer
-                        builder: (context, bleService, child) {
-                          final data = bleService.currentGpsData;
-                          return Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              _buildDataRow('Aktualna prędkość:', '${data.currentSpeed?.toStringAsFixed(2) ?? 'N/A'} km/h'),
-                              _buildDataRow('Maksymalna prędkość:', '${data.maxSpeed?.toStringAsFixed(2) ?? 'N/A'} km/h'),
-                              _buildDataRow('Przebyty dystans:', '${data.distance?.toStringAsFixed(3) ?? 'N/A'} km'),
-                              _buildDataRow('Średnia prędkość:', '${data.avgSpeed?.toStringAsFixed(2) ?? 'N/A'} km/h'),
-                              _buildDataRow('Satelity:', '${data.satellites ?? 'N/A'}'),
-                              _buildDataRow('HDOP:', '${data.hdop?.toStringAsFixed(2) ?? 'N/A'}'),
-                              _buildDataRow('Jakość GPS:', '${data.gpsQualityLevel ?? 'N/A'}'),
-                              _buildDataRow('Bateria:', '${data.battery?.toStringAsFixed(2) ?? 'N/A'} V'),
-                              _buildDataRow('Logowanie aktywne:', (data.isLoggingActive ?? false) ? 'Tak' : 'Nie'),
-                            ],
-                          );
-                        },
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 30),
-              // Navigation buttons
               _buildDashboardButton(
                 context,
                 icon: Icons.speed,
@@ -103,23 +65,28 @@ class DashboardScreen extends StatelessWidget {
                   Navigator.pushNamed(context, '/training');
                 },
               ),
+              const SizedBox(height: 20), // Odstęp między grupami przycisków
+              // NOWOŚĆ: Przyciski Historia i Info przeniesione do body
+              _buildDashboardButton(
+                context,
+                icon: Icons.history, // Ikona historii
+                label: 'Historia',
+                onPressed: () {
+                  Navigator.pushNamed(context, '/history');
+                },
+              ),
+              const SizedBox(height: 20),
+              _buildDashboardButton(
+                context,
+                icon: Icons.info, // Ikona informacji
+                label: 'Informacje o Urządzeniu', // Zmieniono tekst na bardziej opisowy
+                onPressed: () {
+                  Navigator.pushNamed(context, '/info');
+                },
+              ),
             ],
           ),
         ),
-      ),
-    );
-  }
-
-  // Helper widget to build data rows
-  Widget _buildDataRow(String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4.0),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(label, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-          Text(value, style: const TextStyle(fontSize: 16)),
-        ],
       ),
     );
   }

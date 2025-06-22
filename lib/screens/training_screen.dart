@@ -6,7 +6,7 @@ import 'package:madspeed_app/widgets/custom_chart.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
-import 'package:madspeed_app/widgets/status_indicators_widget.dart'; // <--- DODANO TEN IMPORT
+import 'package:madspeed_app/widgets/status_indicators_widget.dart';
 
 class TrainingScreen extends StatefulWidget {
   const TrainingScreen({super.key});
@@ -22,6 +22,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
   double _finalMaxSpeed = 0.0;
   double _finalDistance = 0.0;
   double _finalAverageSpeed = 0.0;
+  Duration _finalDuration = Duration.zero; // Dodana zmienna do przechowywania czasu trwania
 
   @override
   void initState() {
@@ -46,6 +47,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
       _finalMaxSpeed = 0.0;
       _finalDistance = 0.0;
       _finalAverageSpeed = 0.0;
+      _finalDuration = Duration.zero; // Resetuj czas trwania
     });
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Logowanie treningu rozpoczęte!')),
@@ -53,49 +55,143 @@ class _TrainingScreenState extends State<TrainingScreen> {
   }
 
   void _stopLogging(BLEService bleService) async {
-    await bleService.sendControlCommand("STOP_LOG");
+    _showLoadingDialog(); // Pokaż dialog ładowania
 
-    // Po zatrzymaniu, odczytaj pełne dane logu z urządzenia
-    _loggedData = await bleService.readLogData();
-    debugPrint("Received ${_loggedData.length} log points.");
+    try {
+      await bleService.sendControlCommand("STOP_LOG");
 
-    // Przelicz statystyki z otrzymanych _loggedData
-    _calculateFinalStats(_loggedData);
+      // Po zatrzymaniu, odczytaj pełne dane logu z urządzenia
+      _loggedData = await bleService.readLogData();
+      // debugPrint("Received ${_loggedData.length} log points."); // Wyłączono debugowanie
 
-    if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Logowanie treningu zakończone! Dane pobrane.')),
-      );
-      // Nie pokazujemy automatycznie okna zapisu, użytkownik użyje przycisku "Zapisz Trening"
+      _calculateFinalStats(_loggedData);
+
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Logowanie treningu zakończone! Dane pobrane.')),
+        );
+      }
+    } catch (e) {
+      // debugPrint("Error stopping logging or reading log data: $e"); // Wyłączono debugowanie
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Błąd podczas pobierania logów: ${e.toString()}')),
+        );
+      }
+      _loggedData.clear(); // Wyczyść dane, jeśli wystąpił błąd
+      _calculateFinalStats([]); // Zresetuj statystyki
+    } finally {
+      _hideLoadingDialog(); // Ukryj dialog ładowania, niezależnie od wyniku
+      setState(() {}); // Wymuś odświeżenie UI po zakończeniu operacji
+    }
+  }
+
+  void _showLoadingDialog() {
+    showDialog(
+      context: context,
+      barrierDismissible: false, // Użytkownik nie może zamknąć dialogu kliknięciem poza nim
+      builder: (BuildContext context) {
+        final bleService = Provider.of<BLEService>(context);
+        return PopScope( // Użyj PopScope zamiast WillPopScope
+          canPop: false, // Blokuj zamykanie przyciskiem Wstecz
+          child: AlertDialog(
+            title: const Text('Pobieranie logów...'),
+            content: ValueListenableBuilder<double>(
+              valueListenable: bleService.logTransferProgress,
+              builder: (context, progress, child) {
+                return Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    LinearProgressIndicator(value: progress == 0.0 ? null : progress), // Nieskończony, jeśli 0
+                    if (progress > 0.0 && progress <= 1.0) // Pokaż procent tylko jeśli jest sensowny
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8.0),
+                        child: Text('${(progress * 100).toInt()}%'),
+                      ),
+                  ],
+                );
+              },
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  void _hideLoadingDialog() {
+    // Sprawdź, czy dialog jest nadal na stosie nawigacji, zanim spróbujesz go zamknąć
+    if (Navigator.of(context).canPop()) {
+      Navigator.of(context).pop();
     }
   }
 
   void _calculateFinalStats(List<LogDataPoint> data) {
+    // debugPrint("Starting _calculateFinalStats with ${data.length} points."); // Wyłączono debugowanie
     if (data.isEmpty) {
+      // debugPrint("Data is empty, setting stats to 0."); // Wyłączono debugowanie
       _finalMaxSpeed = 0.0;
       _finalDistance = 0.0;
       _finalAverageSpeed = 0.0;
+      _finalDuration = Duration.zero; // Resetuj czas trwania
       return;
     }
 
     double maxSpd = 0.0;
     double totalSpd = 0.0;
     int speedPoints = 0;
-    double totalDist = data.last.distance; // Całkowity dystans z ostatniego punktu
+
+    // Użyj ostatniej wartości dystansu z logu jako całkowity dystans
+    // Upewnij się, że 'distance' w LogDataPoint jest w metrach, a ESP32 wysyłało je jako 'distance_m'
+    // Flutter konwertuje na km później
+    double totalDist = data.isNotEmpty ? data.last.distance : 0.0;
+    // debugPrint("Initial totalDist from last point: $totalDist meters"); // Wyłączono debugowanie
+
 
     for (var point in data) {
-      if (point.speed > maxSpd) {
-        maxSpd = point.speed;
+      // debugPrint("Processing point: timestamp=${point.timestamp}, speed=${point.speed}, distance=${point.distance}"); // Wyłączono debugowanie
+      // Obliczaj maks. prędkość tylko dla punktów z rzeczywistą prędkością (powyżej 0.1, aby ignorować dryf GPS)
+      if (point.speed > 0.1) {
+        if (point.speed > maxSpd) {
+          maxSpd = point.speed;
+          // debugPrint("New max speed found: $maxSpd km/h"); // Wyłączono debugowanie
+        }
+        totalSpd += point.speed;
+        speedPoints++;
+      } else {
+        // debugPrint("Speed ${point.speed} <= 0.1, skipping for avg/max calculation."); // Wyłączono debugowanie
       }
-      totalSpd += point.speed;
-      speedPoints++;
+    }
+
+    // Obliczanie czasu trwania
+    Duration duration = Duration.zero;
+    if (data.length > 1) {
+      final double startTime = data.first.timestamp.toDouble(); // Rzutowanie na double
+      final double endTime = data.last.timestamp.toDouble();   // Rzutowanie na double
+      duration = Duration(seconds: (endTime - startTime).round());
     }
 
     setState(() {
       _finalMaxSpeed = maxSpd;
-      _finalDistance = totalDist / 1000.0; // Konwertuj metry na km
+      _finalDistance = totalDist; // Zostaw w metrach do formatowania w _buildMeasurementRow
       _finalAverageSpeed = speedPoints > 0 ? totalSpd / speedPoints : 0.0;
+      _finalDuration = duration; // Ustaw obliczony czas trwania
+      // debugPrint("Calculated Final Stats: Max Speed: $_finalMaxSpeed km/h, Distance: $_finalDistance km, Avg Speed: $_finalAverageSpeed km/h, Duration: $_finalDuration"); // Wyłączono debugowanie
     });
+  }
+
+  // Funkcja formatująca czas trwania
+  String _formatDuration(Duration duration) {
+    String twoDigits(int n) => n.toString().padLeft(2, '0');
+    final String minutes = twoDigits(duration.inMinutes.remainder(60));
+    final String seconds = twoDigits(duration.inSeconds.remainder(60));
+    final String hours = twoDigits(duration.inHours);
+    if (duration.inHours > 0) {
+      return '$hours godz. $minutes min. $seconds sek.';
+    } else if (duration.inMinutes > 0) {
+      return '$minutes min. $seconds sek.';
+    } else {
+      return '$seconds sek.';
+    }
   }
 
   void _showSaveResultDialog() {
@@ -109,8 +205,10 @@ class _TrainingScreenState extends State<TrainingScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text('Maks. prędkość: ${_finalMaxSpeed.toStringAsFixed(2)} km/h'),
-              Text('Dystans: ${_finalDistance.toStringAsFixed(3)} km'),
+              // Użyj _buildDynamicDistanceText do formatowania dystansu
+              _buildDynamicDistanceText(_finalDistance),
               Text('Średnia prędkość: ${_finalAverageSpeed.toStringAsFixed(2)} km/h'),
+              Text('Czas trwania: ${_formatDuration(_finalDuration)}'), // Wyświetl czas trwania
               const SizedBox(height: 15),
               TextField(
                 controller: _sessionNameController,
@@ -155,9 +253,11 @@ class _TrainingScreenState extends State<TrainingScreen> {
       id: const Uuid().v4(),
       name: _sessionNameController.text,
       maxSpeed: _finalMaxSpeed,
+      // Zapisz dystans w metrach, tak jak jest obliczany i pobierany
       distance: _finalDistance,
       averageSpeed: _finalAverageSpeed,
       timestamp: DateTime.now(),
+      duration: _finalDuration.inSeconds, // Zapisz czas trwania w sekundach
       logData: _loggedData, // Zapisz rzeczywiste zalogowane punkty
     );
 
@@ -186,6 +286,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
       _finalMaxSpeed = 0.0;
       _finalDistance = 0.0;
       _finalAverageSpeed = 0.0;
+      _finalDuration = Duration.zero; // Resetuj czas trwania
       _loggedData.clear(); // Wyczyść dane lokalnie
     });
     ScaffoldMessenger.of(context).showSnackBar(
@@ -203,8 +304,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
       appBar: AppBar(
         title: const Text('Trening'),
         actions: [
-          // Ikony statusu (bateria, GPS) w AppBar
-          const StatusIndicatorsWidget(), 
+          const StatusIndicatorsWidget(), // Dodano pasek statusu
           const SizedBox(width: 10),
           IconButton(
             icon: const Icon(Icons.history),
@@ -229,21 +329,14 @@ class _TrainingScreenState extends State<TrainingScreen> {
                   children: [
                     Text('Aktualny pomiar', style: Theme.of(context).textTheme.headlineSmall),
                     const SizedBox(height: 10),
-                    _buildMeasurementRow(
-                      'Prędkość:',
-                      '${data.currentSpeed?.toStringAsFixed(2) ?? 'N/A'}',
-                      'km/h',
-                    ),
+
                     _buildMeasurementRow(
                       'Maks. prędkość:',
                       '${data.maxSpeed?.toStringAsFixed(2) ?? 'N/A'}',
                       'km/h',
                     ),
-                    _buildMeasurementRow(
-                      'Dystans:',
-                      '${data.distance?.toStringAsFixed(3) ?? 'N/A'}',
-                      'km',
-                    ),
+                    // Użyj nowej funkcji do wyświetlania dynamicznego dystansu dla danych bieżących
+                    _buildDynamicDistanceRow('Dystans:', data.distance),
                     _buildMeasurementRow(
                       'Średnia prędkość:',
                       '${data.avgSpeed?.toStringAsFixed(2) ?? 'N/A'}',
@@ -254,11 +347,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
                       isLoggingActiveFromDevice ? 'Tak' : 'Nie',
                       '', // Brak jednostki
                     ),
-                    _buildMeasurementRow(
-                      'Bateria:',
-                      '${data.battery?.toStringAsFixed(2) ?? 'N/A'}',
-                      'V', // Jednostka V
-                    ),
+
                     const SizedBox(height: 20),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
@@ -269,7 +358,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
                                 ? () => _startLogging(bleService)
                                 : null,
                             icon: const Icon(Icons.play_arrow),
-                            label: const Text('Start Logowanie'),
+                            label: const Text('Start'),
                             style: ElevatedButton.styleFrom(
                               backgroundColor: Colors.green,
                             ),
@@ -282,7 +371,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
                                 ? () => _stopLogging(bleService)
                                 : null,
                             icon: const Icon(Icons.stop),
-                            label: const Text('Stop Logowanie'),
+                            label: const Text('Stop'),
                             style: ElevatedButton.styleFrom(
                               backgroundColor: Colors.red,
                             ),
@@ -305,10 +394,12 @@ class _TrainingScreenState extends State<TrainingScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    _buildMeasurementRow('Maks. prędkość (zalogowana):', '${_finalMaxSpeed.toStringAsFixed(2)}', 'km/h'),
-                    _buildMeasurementRow('Całkowity dystans (zalogowany):', '${_finalDistance.toStringAsFixed(3)}', 'km'),
-                    _buildMeasurementRow('Średnia prędkość (zalogowana):', '${_finalAverageSpeed.toStringAsFixed(2)}', 'km/h'),
-                    const SizedBox(height: 20),
+                    _buildMeasurementRow('Maks. prędkość:', '${_finalMaxSpeed.toStringAsFixed(2)}', 'km/h'),
+                    // Użyj nowej funkcji do wyświetlania dynamicznego dystansu dla wyników końcowych
+                    _buildDynamicDistanceRow('Całkowity dystans:', _finalDistance),
+                    _buildMeasurementRow('Średnia prędkość:', '${_finalAverageSpeed.toStringAsFixed(2)}', 'km/h'),
+                    _buildMeasurementRow('Czas trwania:', _formatDuration(_finalDuration), ''), // Wyświetl czas trwania
+                    const SizedBox(height: 20), // Nowy odstęp
                     if (_loggedData.isNotEmpty)
                       SizedBox(
                         height: 250, // Wysokość wykresu
@@ -332,7 +423,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
                                 ? _showSaveResultDialog
                                 : null,
                             icon: const Icon(Icons.save),
-                            label: const Text('Zapisz Trening'),
+                            label: const Text('Zapisz'),
                             style: ElevatedButton.styleFrom(
                               backgroundColor: Colors.blue,
                             ),
@@ -345,7 +436,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
                                 ? _resetDeviceData
                                 : null,
                             icon: const Icon(Icons.delete_forever), // Zmieniona ikona dla resetu danych
-                            label: const Text('Reset Logów'),
+                            label: const Text('Reset'),
                             style: ElevatedButton.styleFrom(
                               backgroundColor: Colors.orange,
                             ),
@@ -381,5 +472,39 @@ class _TrainingScreenState extends State<TrainingScreen> {
         ],
       ),
     );
+  }
+
+  // NOWA FUNKCJA do dynamicznego formatowania dystansu
+  Widget _buildDynamicDistanceRow(String label, double? distanceMeters) {
+    String valueText;
+    String unitText;
+
+    if (distanceMeters == null) {
+      valueText = 'N/A';
+      unitText = '';
+    } else if (distanceMeters < 1000) { // Jeśli mniej niż 1 km
+      valueText = distanceMeters.toStringAsFixed(0); // Zaokrągl do całości metrów
+      unitText = 'm';
+    } else { // 1 km lub więcej
+      valueText = (distanceMeters / 1000.0).toStringAsFixed(3); // Konwertuj na km
+      unitText = 'km';
+    }
+
+    return _buildMeasurementRow(label, valueText, unitText);
+  }
+
+  // NOWA FUNKCJA do dynamicznego formatowania dystansu w dialogu zapisu
+  Widget _buildDynamicDistanceText(double distanceMeters) {
+    String valueText;
+    String unitText;
+
+    if (distanceMeters < 1000) { // Jeśli mniej niż 1 km
+      valueText = distanceMeters.toStringAsFixed(0); // Zaokrągl do całości metrów
+      unitText = 'm';
+    } else { // 1 km lub więcej
+      valueText = (distanceMeters / 1000.0).toStringAsFixed(3); // Konwertuj na km
+      unitText = 'km';
+    }
+    return Text('Dystans: $valueText $unitText');
   }
 }

@@ -1,15 +1,15 @@
 // --- Konieczne zdefiniowanie aliasów pinów dla Seeed Studio XIAO ESP32S3 ---
-// WERYFIKACJA PINÓW NA PODSTAWIE DOSTARCZONEGO SCHEMATU:
+// WERYFIFIKACJA PINÓW NA PODSTAWIE DOSTARCZONEGO SCHEMATU:
 // LED_BUILTIN jest poprawnie zdefiniowany dla tej płytki
 // Potwierdzono, że na Seeed Studio XIAO ESP32S3 dioda LED jest active-LOW
-#define GNSS_RX_PIN 44             // D7 na pinoucie (GPIO44)
-#define GNSS_TX_PIN 43             // D6 na pinoucie (GPIO43)
-#define BATTERY_PIN 2              // A1 na pinoucie (GPIO2)
+#define GNSS_RX_PIN 44          // D7 na pinoucie (GPIO44)
+#define GNSS_TX_PIN 43          // D6 na pinoucie (GPIO43)
+#define BATTERY_PIN 2           // A1 na pinoucie (GPIO2)
 
 // Prototypy funkcji
 void writeBufferToFile();
-void readBatteryVoltage(); 
-void sendPMTKCommand(const String& command); 
+void readBatteryVoltage();
+void sendPMTKCommand(const String& command);
 
 #include <BLEDevice.h>
 #include <BLEServer.h>
@@ -24,11 +24,11 @@ void sendPMTKCommand(const String& command);
 #include <SPIFFS.h>        // Do obsługi systemu plików
 
 // --- Parametry precyzji GNSS ---
-#define MIN_DISTANCE_M    0.01  // ZMNIEJSZONO: Min. odległość do dodania do dystansu (w metrach)
-#define MIN_SPEED_KMH     0.1   // ZMNIEJSZONO: Min. prędkość do uznania za ruch (w km/h)
+#define MIN_DISTANCE_M    0.01  // Min. odległość do dodania do dystansu (w metrach)
+#define MIN_SPEED_KMH     0.1   // Min. prędkość do uznania za ruch do obliczenia średniej/maksymalnej (w km/h)
 #define MIN_SATS          7     // Min. liczba satelitów dla dobrej precyzji
 #define MAX_HDOP          2.5   // Maks. HDOP (Horizontal Dilution of Precision) dla dobrej precyzji
-#define MAX_FIX_AGE_MS    1500  // Maks. wiek poprawki GNSS (w milisekundach), po którym dane są uznawane za stare
+#define MAX_FIX_AGE_MS    1500  // Maks. wiek poprawki GNSS (w milisekladach), po którym dane są uznawane za stare
 
 const char* DATA_FILE = "/log.csv";    // Nazwa pliku do logowania danych
 
@@ -53,22 +53,20 @@ HardwareSerial gnssSerial(1); // Użycie UART1 dla GNSS (piny 43 TX, 44 RX na ES
 TinyGPSPlus gnss;              // Obiekt GNSS
 
 // --- Zmienne globalne dla pomiarów ---
-float maxSpeed = 0;
-float sumSpeed = 0;
-int speedCount = 0;
+float liveMaxSpeed = 0;    // Maksymalna prędkość w czasie rzeczywistym
+float liveSumSpeed = 0;    // Suma prędkości do obliczenia średniej w czasie rzeczywistym
+int liveSpeedCount = 0;    // Licznik odczytów prędkości do obliczenia średniej w czasie rzeczywistym
+
 float distance_km = 0;
 float lastLat = 0.0;
 float lastLng = 0.0;
 bool hasFirstFixForDistance = false; // NOWA FLAGA DO INICJALIZACJI DYSTANSY
 
+// Zmienne do logowania offline
 String measurementDataBuffer = ""; // Bufor na dane do zapisu do pliku
 unsigned long lastFileWriteMillis = 0;
 const unsigned long FILE_WRITE_INTERVAL_MS = 5000; // Interwał zapisu danych do pliku (5 sekund)
 bool loggingActive = false; // Status logowania (czy dane są zapisywane do pliku)
-
-// --- Zmienne dla LED ---
-unsigned long lastBlinkMillis = 0;
-const unsigned long BLINK_INTERVAL_MS = 250; // Interwał mrugania diody (250 ms)
 
 // --- Zmienne dla cyklicznych powiadomień BLE ---
 unsigned long lastBleNotifyMillis = 0;
@@ -81,14 +79,17 @@ String dynamicPassword; // Dedykowane dla przyszłych funkcji WiFi/WEB
 
 // --- Zmienne dla odczytu baterii ---
 float currentBatteryVoltage = 0.0; // Przechowuje ostatnie odczytane napięcie baterii
+float batteryPercentage = 0.0;      // Przechowuje obliczony procent baterii
 unsigned long lastBatteryReadMillis = 0;
 const unsigned long BATTERY_READ_INTERVAL_MS = 15000; // Odczytuj baterię co 15 sekund
 
 // --- Zmienne do transferu logów przez NOTIFY ---
 const int MAX_BLE_PACKET_SIZE = 240; // Max size for BLE MTU (247 bytes - 7 bytes GATT header)
-String fullLogDataToTransfer = ""; // Bufor na pełne dane logów do wysłania
+// Removed fullLogDataToTransfer as it will no longer hold the entire file in RAM
 int currentLogTransferIndex = 0;
 bool isLogTransferActive = false; // Flaga kontrolująca aktywny transfer logów
+File logFile; // Global file object to stream logs
+int _totalLinesInLogFile = 0; // NEW: To store total lines for metadata
 
 
 // --- Klasy Callbacks dla BLE ---
@@ -96,15 +97,21 @@ bool isLogTransferActive = false; // Flaga kontrolująca aktywny transfer logów
 // Klasa do obsługi zdarzeń serwera BLE (połączenie/rozłączenie)
 class MyServerCallbacks: public BLEServerCallbacks {
     void onConnect(BLEServer* pServer) {
-      deviceConnected = true;
       Serial.println("[BLE] Urządzenie BLE połączone.");
+      deviceConnected = true;
       // Możesz tutaj wyłączyć reklamowanie, jeśli chcesz tylko jedno połączenie naraz
       // BLEDevice::getAdvertising()->stop();
     };
 
     void onDisconnect(BLEServer* pServer) {
-      deviceConnected = false;
       Serial.println("[BLE] Urządzenie BLE rozłączone. Rozpoczynanie ponownej reklamy...");
+      deviceConnected = false;
+      // Close the log file if connection is lost during transfer
+      if (logFile) {
+        logFile.close();
+        isLogTransferActive = false;
+        Serial.println("[BLE LOG TRANSFER] Log file closed due to disconnection.");
+      }
       // Rozpocznij ponownie reklamowanie, aby umożliwić nowe połączenia
       BLEDevice::startAdvertising();
     }
@@ -114,7 +121,7 @@ class MyServerCallbacks: public BLEServerCallbacks {
 class MyCharacteristicCallbacks: public BLECharacteristicCallbacks {
     // Wywoływane, gdy aplikacja mobilna zapisuje dane do charakterystyki (np. komendy)
     void onWrite(BLECharacteristic *pCharacteristic) {
-      std::string value = pCharacteristic->getValue().c_str();  
+      std::string value = pCharacteristic->getValue().c_str();
       if (value.length() > 0) {
         String command = String(value.c_str());
         Serial.print("[BLE] Otrzymano komendę: ");
@@ -122,80 +129,97 @@ class MyCharacteristicCallbacks: public BLECharacteristicCallbacks {
 
         if (command == "START_LOG") {
           loggingActive = true;
-          maxSpeed = 0; sumSpeed = 0; speedCount = 0; distance_km = 0; 
+          liveMaxSpeed = 0; liveSumSpeed = 0; liveSpeedCount = 0; // Resetuj zmienne real-time
+          distance_km = 0;
           lastLat = 0.0; // Reset lastLat/Lng, będą zainicjalizowane pierwszym dobrym fixem
           lastLng = 0.0;
           hasFirstFixForDistance = false; // Resetuj flagę pierwszego fix'a
 
           measurementDataBuffer = ""; // Wyczyść bufor
-          lastFileWriteMillis = millis(); 
+          lastFileWriteMillis = millis();
           isLogTransferActive = false; // Zatrzymaj ewentualny transfer logów
-          fullLogDataToTransfer = ""; // Wyczyść bufor transferu
+          if (logFile) logFile.close(); // Ensure file is closed if logging restarts
           Serial.println("[LOG] Logowanie ROZPOCZĘTE.");
         } else if (command == "STOP_LOG") {
           loggingActive = false;
           writeBufferToFile(); // Zapisz pozostałe dane, które są w buforze
           Serial.println("[LOG] Logowanie ZATRZYMANE i dane zapisane.");
           // Po zatrzymaniu logowania, NIE rozpoczynamy automatycznie transferu.
-          // Transfer zostanie zainicjowany przez komendę REQUEST_LOGS z Fluttera.
+          // Transfer zostanie zainicjalizowany przez komendę REQUEST_LOGS z Fluttera.
         } else if (command == "RESET") {
           loggingActive = false;
-          maxSpeed = 0; sumSpeed = 0; speedCount = 0; distance_km = 0; 
-          lastLat = 0.0; 
+          liveMaxSpeed = 0; liveSumSpeed = 0; liveSpeedCount = 0; // Resetuj zmienne real-time
+          distance_km = 0;
+          lastLat = 0.0;
           lastLng = 0.0;
           hasFirstFixForDistance = false; // Resetuj flagę pierwszego fix'a
 
-          measurementDataBuffer = ""; 
+          measurementDataBuffer = "";
           if (SPIFFS.exists(DATA_FILE)) {
             SPIFFS.remove(DATA_FILE); // Usuń plik logowania
             Serial.println("[SPIFFS] Plik logowania usunięty.");
           }
           isLogTransferActive = false; // Zatrzymaj ewentualny transfer logów
-          fullLogDataToTransfer = ""; // Wyczyść bufor transferu
+          if (logFile) logFile.close(); // Ensure file is closed
           Serial.println("[DATA] Dane zresetowane.");
-        } else if (command == "REQUEST_LOGS") { // NOWA KOMENDA DLA FLUTTERA
+        } else if (command == "REQUEST_LOGS") { // KOMENDA DLA FLUTTERA - Ulepszona logika
           Serial.println("[BLE] Otrzymano żądanie transferu logów.");
-          fullLogDataToTransfer = "["; // Rozpocznij budowanie pełnego JSON-a
-          bool hasData = false; 
-          if (SPIFFS.exists(DATA_FILE)) {
-              File file = SPIFFS.open(DATA_FILE, FILE_READ);
-              if (file) {
-                  while (file.available()) {
-                      String line = file.readStringUntil('\n'); line.trim();
-                      if (line.length() > 0) {
-                          int firstComma = line.indexOf(',');
-                          int secondComma = line.indexOf(',', firstComma + 1);
-                          int thirdComma = line.indexOf(',', secondComma + 1); // Nowy: do lat
-                          int fourthComma = line.indexOf(',', thirdComma + 1); // Nowy: do lng
 
-                          if (firstComma != -1 && secondComma != -1 && thirdComma != -1 && fourthComma != -1) { 
-                              if (hasData) fullLogDataToTransfer += ","; 
-                              // Zmiana formatu JSON, aby pasował do LogDataPoint (timestamp, speed, distance, latitude, longitude)
-                              fullLogDataToTransfer += "{\"timestamp\":" + line.substring(0, firstComma) + 
-                                              ",\"speed\":" + line.substring(firstComma + 1, secondComma) + 
-                                              ",\"distance\":" + line.substring(secondComma + 1, thirdComma) + 
-                                              ",\"latitude\":" + line.substring(thirdComma + 1, fourthComma) +
-                                              ",\"longitude\":" + line.substring(fourthComma + 1) + "}"; 
-                              hasData = true;
-                          }
-                      }
-                  }
-                  file.close();
+          if (logFile) { // If a file is already open, close it first
+            logFile.close();
+            Serial.println("[BLE LOG TRANSFER] Poprzedni strumień pliku logów zamknięty.");
+          }
+
+          if (!SPIFFS.exists(DATA_FILE)) {
+            Serial.println("[BLE LOG TRANSFER] Plik logów nie istnieje. Wysyłam pustą listę.");
+            pLogDataCharacteristic->setValue("END_EMPTY_LOG"); // Specific end for empty log
+            pLogDataCharacteristic->notify();
+            isLogTransferActive = false;
+            _totalLinesInLogFile = 0; // Ensure count is zero
+            return;
+          }
+
+          // --- NEW LOGIC: Count lines first (for metadata) ---
+          File tempFile = SPIFFS.open(DATA_FILE, FILE_READ);
+          if (!tempFile) {
+              Serial.println("[BLE LOG TRANSFER ERROR] Błąd otwarcia pliku log.csv do zliczania linii!");
+              pLogDataCharacteristic->setValue("ERROR: Failed to open file for counting lines."); // Send error message
+              pLogDataCharacteristic->notify();
+              isLogTransferActive = false;
+              return;
+          }
+          _totalLinesInLogFile = 0;
+          while (tempFile.available()) {
+              if (tempFile.read() == '\n') {
+                  _totalLinesInLogFile++;
               }
           }
-          fullLogDataToTransfer += "]";
-          currentLogTransferIndex = 0; // Zresetuj indeks chunk'a
-          isLogTransferActive = true; // Aktywuj transfer logów
-          Serial.print("[BLE LOG TRANSFER] Przygotowano pełne dane logów do transferu. Rozmiar: ");
-          Serial.print(fullLogDataToTransfer.length());
-          Serial.println(" bajtów. Rozpoczynanie transferu...");
-          // Jeśli jest pusty, wysyłamy pusty []
-          if (fullLogDataToTransfer.length() <= 2) { // 2 znaki to "[]"
-              pLogDataCharacteristic->setValue("[]");
-              pLogDataCharacteristic->notify();
-              Serial.println("[BLE LOG TRANSFER] Wysłano pustą listę logów.");
-              isLogTransferActive = false; // Zakończ transfer
+          tempFile.close();
+          Serial.print("[BLE LOG TRANSFER] Całkowita liczba linii w pliku: ");
+          Serial.println(_totalLinesInLogFile);
+
+          // --- Open file for actual transfer ---
+          logFile = SPIFFS.open(DATA_FILE, FILE_READ);
+          if (!logFile) {
+            Serial.println("[BLE LOG TRANSFER ERROR] Błąd otwarcia pliku log.csv do odczytu!");
+            pLogDataCharacteristic->setValue("ERROR: Failed to open file for reading data."); // Send error message
+            pLogDataCharacteristic->notify();
+            isLogTransferActive = false;
+            return;
           }
+          Serial.println("[BLE LOG TRANSFER] Plik logów otwarty do odczytu.");
+
+          // Krok 1: Wyślij metadane z całkowitą liczbą linii.
+          String metadata = "METADATA_LINES:" + String(_totalLinesInLogFile);
+          pLogDataCharacteristic->setValue(metadata.c_str());
+          pLogDataCharacteristic->notify();
+          Serial.println("[BLE LOG TRANSFER] Wysłano METADATA: " + metadata);
+
+          // Krok 2: Rozpocznij wysyłanie fragmentów logu w loop()
+          currentLogTransferIndex = 0; // This will now act as line counter for progress
+          isLogTransferActive = true; // Aktywuj transfer logów
+          Serial.println("[BLE LOG TRANSFER] Rozpoczynanie strumieniowego transferu logów...");
+
         } else if (command == "SET_MODE:SPEEDMASTER") { // NOWA KOMENDA DLA TRYBU SPEED MASTER
           currentBleNotifyInterval = 200; // Ustaw interwał powiadomień na 200 ms (5 Hz)
           sendPMTKCommand("PMTK220,200"); // Ustaw częstotliwość GPS na 5 Hz
@@ -215,12 +239,11 @@ class MyCharacteristicCallbacks: public BLECharacteristicCallbacks {
     void onRead(BLECharacteristic *pCharacteristic) {
         if (pCharacteristic->getUUID().toString() == CHAR_UUID_DEVICE_INFO) {
             Serial.println("[BLE] Otrzymano żądanie odczytu informacji o urządzeniu.");
-            readBatteryVoltage(); 
-            String infoJson = "{\"ssid\":\"" + dynamicSsid + "\",\"password\":\"" + dynamicPassword + "\",\"isLoggingActive\":" + (loggingActive ? "true" : "false") + ",\"battery\":" + String(currentBatteryVoltage, 2) + "}";
+            readBatteryVoltage(); // Odczytaj i przelicz napięcie na procent
+            String infoJson = "{\"ssid\":\"" + dynamicSsid + "\",\"password\":\"" + dynamicPassword + "\",\"isLoggingActive\":" + (loggingActive ? "true" : "false") + ",\"battery\":" + String(batteryPercentage, 0) + "}"; // Wysyłaj procent, a nie surowe napięcie
             pCharacteristic->setValue(infoJson.c_str());
             Serial.println("[BLE] Wysłano informacje o urządzeniu: " + infoJson);
         }
-        // CHAR_UUID_LOG_DATA nie ma już onRead, bo używa notify
     }
 };
 
@@ -230,15 +253,11 @@ class MyCharacteristicCallbacks: public BLECharacteristicCallbacks {
 void setLedState() {
   if (loggingActive) {
     // Tryb logowania: dioda miga
-    if (millis() - lastBlinkMillis > BLINK_INTERVAL_MS) {
-      // Przełączanie stanu dla active-LOW
-      digitalWrite(LED_BUILTIN, digitalRead(LED_BUILTIN) == HIGH ? LOW : HIGH);
-      lastBlinkMillis = millis();
-    }
+    // Dioda LED pozostaje WYŁĄCZONA dla oszczędności, nawet podczas logowania.
+    digitalWrite(LED_BUILTIN, HIGH); // Dioda LED wyłączona (active-LOW)
   } else {
-    // Urządzenie włączone (bez logowania): dioda świeci światłem ciągłym
-    // Aby dioda świeciła w trybie active-LOW, ustawiamy pin na LOW.
-    digitalWrite(LED_BUILTIN, LOW); 
+    // Urządzenie włączone (bez logowania): dioda wyłączona
+    digitalWrite(LED_BUILTIN, HIGH); // Dioda LED wyłączona (active-LOW)
   }
 }
 
@@ -285,15 +304,15 @@ void addDataToBuffer(unsigned long timestamp, float speed_for_log, float distanc
 void writeBufferToFile() {
   if (measurementDataBuffer.length() == 0) {
     Serial.println("[SPIFFS] Bufor danych pusty, nic do zapisu.");
-    return; // Nic do zapisu
+    return;
   }
 
   File file = SPIFFS.open(DATA_FILE, FILE_APPEND);
   if (!file) {
     Serial.println("[SPIFFS ERROR] Błąd otwarcia pliku log.csv do zapisu!");
-    return; 
+    return;
   }
-  
+
   size_t bytesWritten = file.print(measurementDataBuffer);
   file.close();
   measurementDataBuffer = ""; // Wyczyść bufor po zapisie
@@ -302,28 +321,44 @@ void writeBufferToFile() {
   Serial.println(" bajtów).");
 }
 
-// Funkcja do odczytu napięcia baterii
+// Funkcja do odczytu napięcia baterii i przeliczania na procent
 void readBatteryVoltage() {
-  float rawADC_sum = 0; 
-  int numReadings = 100; 
+  float rawADC_sum = 0;
+  int numReadings = 100;
   for (int i = 0; i < numReadings; i++) {
       rawADC_sum += analogRead(BATTERY_PIN);
-      delayMicroseconds(10); 
+      delayMicroseconds(10);
   }
-  float rawADC = rawADC_sum * (3.3f / 4095.0f) * 2.0f / numReadings; // Skorygowane dzielenie przez numReadings
-  currentBatteryVoltage = rawADC;
+  currentBatteryVoltage = rawADC_sum * (3.3f / 4095.0f) * 2.0f / numReadings; // Skorygowane dzielenie przez numReadings
   Serial.print("[BATT] Odczyt baterii: "); Serial.print(currentBatteryVoltage, 2); Serial.println("V");
+
+  // Przeliczanie na procent: 3.3V = 0%, 4.0V = 100%
+  const float minVoltage = 3.3;
+  const float maxVoltage = 4.0;
+
+  if (currentBatteryVoltage <= minVoltage) {
+      batteryPercentage = 0.0;
+  } else if (currentBatteryVoltage >= maxVoltage) {
+      batteryPercentage = 100.0;
+  } else {
+      batteryPercentage = ((currentBatteryVoltage - minVoltage) / (maxVoltage - minVoltage)) * 100.0;
+  }
+  batteryPercentage = round(batteryPercentage); // Zaokrąglij do najbliższej liczby całkowitej
+  Serial.print("[BATT] Procent baterii: "); Serial.print(batteryPercentage); Serial.println("%");
 }
 
 
 // --- Konfiguracja (Setup) ---
 void setup() {
-  Serial.begin(115200); 
+  Serial.begin(115200);
   Serial.println("\n--- Start MadSpeed Device ---");
 
-  pinMode(LED_BUILTIN, OUTPUT);  
-  digitalWrite(LED_BUILTIN, LOW); 
-  Serial.println("[LED] Dioda LED włączona (stan początkowy).");
+  // Optymalizacja baterii: Dioda LED mignie raz na początku i zostanie wyłączona
+  pinMode(LED_BUILTIN, OUTPUT);
+  digitalWrite(LED_BUILTIN, LOW); // Włącz LED (active-LOW)
+  delay(500); // Trzymaj włączoną przez 0.5 sekundy
+  digitalWrite(LED_BUILTIN, HIGH); // Wyłącz LED (active-LOW)
+  Serial.println("[LED] Dioda LED włączona na krótko i wyłączona (optymalizacja baterii).");
 
   // Inicjalizacja UART dla GNSS
   Serial.print("[GNSS] Inicjalizacja UART1 (RX:");
@@ -332,40 +367,40 @@ void setup() {
   Serial.print(GNSS_TX_PIN);
   Serial.println(") z prędkością 9600.");
   gnssSerial.begin(9600, SERIAL_8N1, GNSS_RX_PIN, GNSS_TX_PIN);
-  delay(1000); 
+  delay(1000);
   Serial.println("[GNSS] Oczekiwanie na stabilizację modułu GNSS (1s)...");
 
   configureGNSS(); // Konfiguracja GNSS (teraz początkowo 1 Hz dla GPS)
 
   Serial.print("[SPIFFS] Inicjalizacja systemu plików SPIFFS...");
-  if (!SPIFFS.begin(true)) { 
+  if (!SPIFFS.begin(true)) {
     Serial.println(" BŁĄD. Próbuję formatować...");
-    SPIFFS.format(); 
+    SPIFFS.format();
     if (!SPIFFS.begin(true)) {
         Serial.println("[SPIFFS ERROR] Ponowna inicjalizacja SPIFFS nieudana. Restart za 5s.");
         delay(5000);
-        ESP.restart(); 
+        ESP.restart();
     }
   }
   Serial.println(" OK. SPIFFS zainicjalizowany.");
 
-  readBatteryVoltage(); 
-  lastBatteryReadMillis = millis(); 
+  readBatteryVoltage();
+  lastBatteryReadMillis = millis();
 
   // --- Konfiguracja BLE ---
 
   uint8_t macWifi[6];
-  esp_wifi_get_mac(WIFI_IF_STA, macWifi); 
+  esp_wifi_get_mac(WIFI_IF_STA, macWifi);
   char macSuffix[7];
   snprintf(macSuffix, sizeof(macSuffix), "%02X%02X%02X", macWifi[3], macWifi[4], macWifi[5]);
   String bleDeviceName = "MadSpeed_" + String(macSuffix);
   Serial.println("[BLE] Użyto MAC WiFi dla nazwy BLE: " + bleDeviceName);
 
-  BLEDevice::init(bleDeviceName.c_str()); 
+  BLEDevice::init(bleDeviceName.c_str());
   Serial.println("[BLE] BLEDevice zainicjalizowany.");
 
   uint8_t macWifiAp[6];
-  esp_wifi_get_mac(WIFI_IF_AP, macWifiAp);  
+  esp_wifi_get_mac(WIFI_IF_AP, macWifiAp);
   char macSuffixWifiAp[7];
   snprintf(macSuffixWifiAp, sizeof(macSuffixWifiAp), "%02X%02X%02X", macWifiAp[3], macWifiAp[4], macWifiAp[5]);
   dynamicSsid = "madspeed_AP_" + String(macSuffixWifiAp);
@@ -375,10 +410,10 @@ void setup() {
 
 
   pServer = BLEDevice::createServer();
-  pServer->setCallbacks(new MyServerCallbacks()); 
+  pServer->setCallbacks(new MyServerCallbacks());
   Serial.println("[BLE] Serwer BLE utworzony.");
 
-  BLEService *pService = pServer->createService(SERVICE_UUID); 
+  BLEService *pService = pServer->createService(SERVICE_UUID);
   Serial.println("[BLE] Usługa BLE utworzona z UUID: " + String(SERVICE_UUID));
 
   // Charakterystyka Current Data (READ, NOTIFY, INDICATE)
@@ -388,16 +423,16 @@ void setup() {
                                         BLECharacteristic::PROPERTY_NOTIFY |
                                         BLECharacteristic::PROPERTY_INDICATE
                                       );
-  pCurrentDataCharacteristic->addDescriptor(new BLE2902()); 
+  pCurrentDataCharacteristic->addDescriptor(new BLE2902());
   Serial.println("[BLE] Charakterystyka CURRENT_DATA utworzona.");
 
   // Charakterystyka Control Commands (WRITE_NR - Write Without Response)
   pControlCharacteristic = pService->createCharacteristic(
                                         CHAR_UUID_CONTROL,
                                         BLECharacteristic::PROPERTY_WRITE |
-                                        BLECharacteristic::PROPERTY_WRITE_NR 
+                                        BLECharacteristic::PROPERTY_WRITE_NR
                                       );
-  pControlCharacteristic->setCallbacks(new MyCharacteristicCallbacks()); 
+  pControlCharacteristic->setCallbacks(new MyCharacteristicCallbacks());
   Serial.println("[BLE] Charakterystyka CONTROL utworzona.");
 
   // Charakterystyka Log Data (NOTIFY for chunks, NO onRead)
@@ -415,20 +450,20 @@ void setup() {
                                         CHAR_UUID_DEVICE_INFO,
                                         BLECharacteristic::PROPERTY_READ
                                       );
-  pDeviceInfoCharacteristic->setCallbacks(new MyCharacteristicCallbacks()); 
+  pDeviceInfoCharacteristic->setCallbacks(new MyCharacteristicCallbacks());
   Serial.println("[BLE] Charakterystyka DEVICE_INFO utworzona.");
 
-  pService->start(); 
+  pService->start();
   Serial.println("[BLE] Usługa BLE uruchomiona.");
 
-  BLEDevice::setMTU(247); 
+  BLEDevice::setMTU(247);
   Serial.println("[BLE] Requested MTU: 247");
-  
-  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();  
-  pAdvertising->addServiceUUID(SERVICE_UUID); 
-  pAdvertising->setScanResponse(true); 
-  pAdvertising->setMinPreferred(0x06); 
-  pAdvertising->setMinPreferred(0x12); 
+
+  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
+  pAdvertising->addServiceUUID(SERVICE_UUID);
+  pAdvertising->setScanResponse(true);
+  pAdvertising->setMinPreferred(0x06);
+  pAdvertising->setMinPreferred(0x12);
   BLEDevice::startAdvertising();
   Serial.println("[BLE] Reklama BLE rozpoczęta. Urządzenie jest widoczne.");
   Serial.println("--- Setup zakończony ---");
@@ -436,21 +471,36 @@ void setup() {
 
 // --- Główna pętla programu (Loop) ---
 void loop() {
-  setLedState(); 
+  setLedState();
+
+  // Deklaracja zmiennych na początku funkcji loop
+  float currentSpeedForDisplay = 0.0; // Prędkość do wyświetlania w BLE (z TinyGPSPlus)
+  float rawSpeedKmh = 0.0; // Surowa prędkość z GNSS, używana do obliczeń liveMaxSpeed/liveAvgSpeed
 
   // Odczyt danych z modułu GNSS
   while (gnssSerial.available() > 0) {
-    if (gnss.encode(gnssSerial.read())) { 
+    if (gnss.encode(gnssSerial.read())) {
       if (gnss.location.isUpdated() && gnss.location.isValid()) {
         if (gnss.location.age() > MAX_FIX_AGE_MS) {
           Serial.println("[GNSS WARNING] Stare dane GNSS, pomijam. Wiek: " + String(gnss.location.age()) + " ms.");
         } else {
             float currentLat = gnss.location.lat();
             float currentLng = gnss.location.lng();
-            float rawSpeedKmh = gnss.speed.kmph(); // Surowa prędkość
-            
-            float displaySpeedKmh = rawSpeedKmh; // Prędkość do wyświetlania/BLE notify
-            if (displaySpeedKmh < 0.3) displaySpeedKmh = 0; // Ogranicz do 0 dla wyświetlania
+
+            rawSpeedKmh = gnss.speed.kmph(); // Surowa prędkość z GNSS od TinyGPSPlus
+
+            currentSpeedForDisplay = rawSpeedKmh; // Używamy prędkości z TinyGPSPlus dla wyświetlania
+
+            // Aktualizuj maks. i średnią prędkość na podstawie surowych danych od TinyGPSPlus
+            // liveMaxSpeed zawsze aktualizuj, jeśli nowa prędkość jest większa
+            if (rawSpeedKmh > liveMaxSpeed) {
+                liveMaxSpeed = rawSpeedKmh;
+            }
+            // Dodawaj prędkość do sumy tylko jeśli jest powyżej progu dryfu (0.1 km/h) dla średniej
+            if (rawSpeedKmh > MIN_SPEED_KMH) {
+                liveSumSpeed += rawSpeedKmh;
+                liveSpeedCount++;
+            }
 
             if (!hasFirstFixForDistance) {
                 // To jest pierwsza ważna poprawka od startu/resetu logowania
@@ -461,33 +511,38 @@ void loop() {
                 Serial.println("[GNSS DEBUG] Pierwsza poprawka GPS do obliczania dystansu zarejestrowana.");
             } else {
                 float delta = TinyGPSPlus::distanceBetween(lastLat, lastLng, currentLat, currentLng);
-                Serial.print("[GNSS DEBUG] Obliczona Delta: "); Serial.print(delta, 6); Serial.println(" m");
 
-                // Warunki akumulacji dystansu (używamy surowej prędkości dla warunku, aby nie pomijać małych ruchów)
+                // Warunki akumulacji dystansu (używamy rawSpeedKmh)
                 bool shouldAccumulate = (delta > MIN_DISTANCE_M) &&
-                                        (rawSpeedKmh >= MIN_SPEED_KMH) && // Używaj rawSpeedKmh tutaj
+                                        (rawSpeedKmh >= MIN_SPEED_KMH) && // Używaj rawSpeedKmh
                                         gnss.satellites.isValid() && (gnss.satellites.value() >= MIN_SATS) &&
                                         gnss.hdop.isValid() && (gnss.hdop.hdop() < MAX_HDOP);
 
                 if (shouldAccumulate) {
-                    distance_km += delta / 1000.0; 
-                    Serial.print("[GNSS DEBUG] Dystans akumulowany. Delta: "); Serial.print(delta, 3); Serial.print(" m, Akumulowany dystans: "); Serial.print(distance_km, 3); Serial.println(" km");
+                    distance_km += delta / 1000.0; // distance_km is actually in KM here, not meters. But the variable name suggests KM so it's consistent.
                 } else {
-                    Serial.print("[GNSS DEBUG] Dystans NIE akumulowany. Powód: ");
-                    if (delta <= MIN_DISTANCE_M) Serial.print("Delta za mała ("); Serial.print(delta, 3); Serial.print("m <= "); Serial.print(MIN_DISTANCE_M, 2); Serial.print("m) | ");
-                    if (rawSpeedKmh < MIN_SPEED_KMH) Serial.print("Prędkość za niska ("); Serial.print(rawSpeedKmh, 2); Serial.print("km/h < "); Serial.print(MIN_SPEED_KMH, 2); Serial.print("km/h) | ");
-                    if (!gnss.satellites.isValid() || gnss.satellites.value() < MIN_SATS) Serial.print("Brak satelitów lub za mało ("); Serial.print(gnss.satellites.isValid() ? gnss.satellites.value() : 0); Serial.print(" < "); Serial.print(MIN_SATS); Serial.print(") | ");
-                    if (!gnss.hdop.isValid() || gnss.hdop.hdop() >= MAX_HDOP) Serial.print("HDOP za wysoki ("); Serial.print(gnss.hdop.isValid() ? gnss.hdop.hdop() : 99.9, 2); Serial.print(" >= "); Serial.print(MAX_HDOP, 2); Serial.print(") | ");
-                    Serial.println();
+                    // Dodano logowanie powodu, dla którego dystans NIE jest akumulowany
+                    // (może być przydatne do dalszej diagnostyki działania GPS)
+                    // Serial.print("[GNSS DEBUG] Dystans NIE akumulowany. Powód: ");
+                    // if (!(delta > MIN_DISTANCE_M)) Serial.print("Delta za mała | ");
+                    // if (!(rawSpeedKmh >= MIN_SPEED_KMH)) Serial.print("Prędkość za niska | ");
+                    // if (!gnss.satellites.isValid()) Serial.print("Satelity nieważne | ");
+                    // else if (!(gnss.satellites.value() >= MIN_SATS)) Serial.print("Za mało satelitów | ");
+                    // if (!gnss.hdop.isValid()) Serial.print("HDOP nieważny | ");
+                    // else if (!(gnss.hdop.hdop() < MAX_HDOP)) Serial.print("HDOP za wysoki | ");
+                    // Serial.println();
                 }
                 // Zawsze aktualizuj ostatnie współrzędne PO obliczeniu delty, aby były gotowe na następny punkt
                 lastLat = currentLat;
                 lastLng = currentLng;
             }
-
             if (loggingActive) {
                 // Zapisuj surową prędkość do pliku logu
-                addDataToBuffer(millis() / 1000, rawSpeedKmh, distance_km * 1000, currentLat, currentLng); 
+                // Note: distance_km is in KM here, but addDataToBuffer expects meters.
+                // Let's adjust addDataToBuffer or ensure consistency.
+                // Given the header ['Distance (m)'] in CSV, it should be meters.
+                // So, let's pass distance_km * 1000.0 to addDataToBuffer
+                addDataToBuffer(millis() / 1000, rawSpeedKmh, distance_km * 1000.0, currentLat, currentLng);
             }
         }
       }
@@ -496,20 +551,17 @@ void loop() {
 
   // --- Okresowy odczyt napięcia baterii ---
   if (millis() - lastBatteryReadMillis > BATTERY_READ_INTERVAL_MS) {
-    readBatteryVoltage(); 
-    lastBatteryReadMillis = millis(); 
+    readBatteryVoltage();
+    lastBatteryReadMillis = millis();
   }
 
   // *** Wysyłanie aktualnych danych przez BLE (Notify) - TERAZ CYKLICZNE ***
   if (deviceConnected && pCurrentDataCharacteristic != NULL && (millis() - lastBleNotifyMillis > currentBleNotifyInterval)) {
-      lastBleNotifyMillis = millis(); 
+      lastBleNotifyMillis = millis();
 
-      float currentSpeedKmh = gnss.speed.isValid() ? gnss.speed.kmph() : 0.0;
-      if (currentSpeedKmh < 0.3) currentSpeedKmh = 0; // Ta zmienna jest tylko do bieżącego wyświetlania/BLE notify
+      float liveAvgSpeed = (liveSpeedCount > 0) ? liveSumSpeed / liveSpeedCount : 0.0;
 
-      float avgSpeed = speedCount > 0 ? sumSpeed / speedCount : 0.0;
-
-      int gnssQualityLevel = 0; 
+      int gnssQualityLevel = 0;
       float hdop = gnss.hdop.isValid() ? gnss.hdop.hdop() : 99.9;
       int sats = gnss.satellites.isValid() ? gnss.satellites.value() : 0;
 
@@ -523,24 +575,24 @@ void loop() {
           else if (satsVal > 0) gnssQualityLevel = 1;
       }
 
-      String json = "{"; 
+      String json = "{";
       json += "\"latitude\":" + (gnss.location.isValid() ? String(gnss.location.lat(), 6) : "null") + ",";
       json += "\"longitude\":" + (gnss.location.isValid() ? String(gnss.location.lng(), 6) : "null") + ",";
       json += "\"altitude\":" + (gnss.altitude.isValid() ? String(gnss.altitude.meters()) : "0") + ",";
       json += "\"satellites\":" + String(sats) + ",";
       json += "\"hdop\":" + (gnss.hdop.isValid() ? String(hdop, 2) : "0") + ",";
-      json += "\"currentSpeed\":" + String(currentSpeedKmh, 2) + ","; // Tutaj używamy oczyszczonej prędkości
-      json += "\"maxSpeed\":" + String(maxSpeed, 2) + ",";
-      json += "\"avgSpeed\":" + String(avgSpeed, 2) + ",";
-      json += "\"distance\":" + String(distance_km, 3) + ","; 
+      json += "\"currentSpeed\":" + String(currentSpeedForDisplay, 2) + ",";
+      json += "\"maxSpeed\":" + String(liveMaxSpeed, 2) + ",";
+      json += "\"avgSpeed\":" + String(liveAvgSpeed, 2) + ",";
+      // POPRAWKA TUTAJ: Wysyłaj dystans jako liczbę (float), nie string
+      json += "\"distance\":" + String(distance_km * 1000.0, 3) + ","; // Wysyłamy dystans w METRACH!
       json += "\"gpsQualityLevel\":" + String(gnssQualityLevel) + ",";
-      json += "\"battery\":" + String(currentBatteryVoltage, 2) + ","; 
+      json += "\"battery\":" + String(batteryPercentage, 0) + ",";
       json += String("\"isLoggingActive\":") + (loggingActive ? "true" : "false");
       json += "}";
 
-      pCurrentDataCharacteristic->setValue(json.c_str()); 
-      pCurrentDataCharacteristic->notify(); 
-      // Serial.println("[BLE] Wysłano dane BLE: " + json); // Odkomentuj dla szczegółowego debugowania BLE
+      pCurrentDataCharacteristic->setValue(json.c_str());
+      pCurrentDataCharacteristic->notify();
   }
 
   // Zapis danych do pliku w regularnych odstępach czasu, jeśli logowanie jest aktywne
@@ -549,43 +601,65 @@ void loop() {
       lastFileWriteMillis = millis();
   }
 
-  // --- Obsługa wysyłania logów przez notify (fragmenty) ---
-  // Wysyłaj fragmenty tylko jeśli fullLogDataToTransfer jest niepusty, jest połączenie BLE
-  // i transfer jest aktywny.
-  if (isLogTransferActive && deviceConnected && pLogDataCharacteristic != NULL) { // pLogDataCharacteristic is now the notify characteristic
-    // Sprawdź, czy są jeszcze fragmenty do wysłania
-    if (currentLogTransferIndex * MAX_BLE_PACKET_SIZE < fullLogDataToTransfer.length()) {
-      int startIndex = currentLogTransferIndex * MAX_BLE_PACKET_SIZE;
-      int endIndex = startIndex + MAX_BLE_PACKET_SIZE;
-      if (endIndex > fullLogDataToTransfer.length()) {
-        endIndex = fullLogDataToTransfer.length();
+  // --- Obsługa wysyłania logów przez notify (pojedyncze obiekty JSON) ---
+  if (isLogTransferActive && deviceConnected && pLogDataCharacteristic != NULL && logFile) {
+      // Small delay to prevent watchdog timer / allow BLE stack to breathe
+      // This delay is CRITICAL for large file transfers, without it, the BLE stack might get overwhelmed.
+      delay(5); // Adjust this value if you still see issues or want faster transfer (e.g., 1ms-10ms)
+
+      if (logFile.available()) {
+          String line = logFile.readStringUntil('\n');
+          line.trim();
+
+          if (line.length() > 0) {
+              int firstComma = line.indexOf(',');
+              int secondComma = line.indexOf(',', firstComma + 1);
+              int thirdComma = line.indexOf(',', secondComma + 1);
+              int fourthComma = line.indexOf(',', thirdComma + 1);
+
+              if (firstComma != -1 && secondComma != -1 && thirdComma != -1 && fourthComma != -1) {
+                  // Format as a single JSON object
+                  String jsonLine = "{\"timestamp\":" + line.substring(0, firstComma) +
+                                    ",\"speed\":" + line.substring(firstComma + 1, secondComma) +
+                                    ",\"distance\":" + line.substring(secondComma + 1, thirdComma) + // This is already meters in log.csv from addDataToBuffer
+                                    ",\"latitude\":" + line.substring(thirdComma + 1, fourthComma) +
+                                    ",\"longitude\":" + line.substring(fourthComma + 1) + "}";
+
+                  // Ensure the JSON object fits within a single BLE packet size
+                  if (jsonLine.length() > MAX_BLE_PACKET_SIZE) {
+                      Serial.print("[BLE LOG TRANSFER ERROR] JSON object too large for single packet (");
+                      Serial.print(jsonLine.length());
+                      Serial.print(" bytes): ");
+                      Serial.println(jsonLine.substring(0, 50) + "..."); // Print a truncated version
+                      // You might need to handle this by splitting the JSON, but for GPS data,
+                      // a single line should typically fit. If not, consider reducing precision or data points.
+                  }
+
+                  pLogDataCharacteristic->setValue(jsonLine.c_str());
+                  pLogDataCharacteristic->notify();
+                  currentLogTransferIndex++; // Increment line counter
+
+                  Serial.print("[BLE LOG TRANSFER] Wysłano obiekt JSON. Linia ");
+                  Serial.print(currentLogTransferIndex);
+                  Serial.print(" z ");
+                  Serial.print(_totalLinesInLogFile);
+                  Serial.print(", Rozmiar: ");
+                  Serial.print(jsonLine.length());
+                  Serial.println(" bajtów.");
+              } else {
+                  Serial.println("[BLE LOG TRANSFER WARNING] Pominięto linię (błąd formatu CSV): " + line);
+              }
+          }
+      } else {
+          // All lines sent, end transfer
+          isLogTransferActive = false;
+          logFile.close(); // Close the file after full transfer
+          currentLogTransferIndex = 0;
+          _totalLinesInLogFile = 0; // Reset count
+          // Wyślij sygnał zakończenia transferu
+          pLogDataCharacteristic->setValue("END");
+          pLogDataCharacteristic->notify();
+          Serial.println("[BLE LOG TRANSFER] Zakończono transfer logów.");
       }
-      String chunk = fullLogDataToTransfer.substring(startIndex, endIndex);
-
-      pLogDataCharacteristic->setValue(chunk.c_str()); 
-      pLogDataCharacteristic->notify();
-
-      Serial.print("[BLE LOG TRANSFER] Wysłano chunk ");
-      Serial.print(currentLogTransferIndex + 1);
-      Serial.print("/");
-      Serial.print((fullLogDataToTransfer.length() + MAX_BLE_PACKET_SIZE - 1) / MAX_BLE_PACKET_SIZE);
-      Serial.print(", Rozmiar: ");
-      Serial.print(chunk.length());
-      Serial.println(" bajtów.");
-
-      currentLogTransferIndex++;
-    } else {
-      // Wszystkie fragmenty wysłane, zakończ transfer
-      isLogTransferActive = false;
-      fullLogDataToTransfer = ""; // Wyczyść bufor po zakończeniu transferu
-      currentLogTransferIndex = 0;
-      // Możesz wysłać pusty pakiet lub specjalną flagę zakończenia, jeśli potrzebujesz w Flutterze
-      pLogDataCharacteristic->setValue("END"); // Sygnał zakończenia transferu
-      pLogDataCharacteristic->notify();
-      Serial.println("[BLE LOG TRANSFER] Zakończono transfer logów.");
-    }
   }
-
-  // Małe opóźnienie, aby uniknąć zapętlania i pozwolić na inne zadania
-  delay(1); 
 }

@@ -20,8 +20,9 @@ class StatusIndicatorsWidget extends StatelessWidget {
           batteryColor = Colors.grey;
           batteryText = "N/A";
         } else {
-          final double batteryPercentage = bleService.batteryPercentage;
-          batteryText = "${batteryPercentage.toInt()}%";
+          // POPRAWKA TUTAJ: Rzutowanie na int za pomocą .toInt()
+          final int batteryPercentage = (bleService.currentGpsData.battery ?? 0).toInt();
+          batteryText = "$batteryPercentage%";
 
           if (batteryPercentage >= 80) {
             batteryIcon = Icons.battery_full;
@@ -52,25 +53,17 @@ class StatusIndicatorsWidget extends StatelessWidget {
           gpsQualityText = "Brak";
         } else {
           final int gpsQualityLevel = bleService.currentGpsData.gpsQualityLevel ?? 0;
-          gpsQualityText = "$gpsQualityLevel/5"; // Wyświetlanie jako poziom/max_poziom
+          gpsQualityText = "$gpsQualityLevel/5";
 
-          if (gpsQualityLevel == 5) {
-            gpsSignalIcon = Icons.signal_cellular_4_bar; // Pełny zasięg (4 bary)
+          // Zmodyfikowana logika, aby używać bardziej powszechnych ikon
+          if (gpsQualityLevel >= 4) { // Poziomy 4 i 5: dobry/pełny sygnał
+            gpsSignalIcon = Icons.signal_cellular_4_bar;
             gpsSignalColor = Colors.green;
-          } else if (gpsQualityLevel == 4) {
-            gpsSignalIcon = Icons.signal_cellular_alt; // 3 bary
-            gpsSignalColor = Colors.lightGreen;
-          } else if (gpsQualityLevel == 3) {
-            gpsSignalIcon = Icons.signal_cellular_alt_2_bar; // 2 bary
-            gpsSignalColor = Colors.orange;
-          } else if (gpsQualityLevel == 2) {
-            gpsSignalIcon = Icons.signal_cellular_alt_1_bar; // 1 bar
-            gpsSignalColor = Colors.amber;
-          } else if (gpsQualityLevel == 1) {
-            gpsSignalIcon = Icons.signal_cellular_0_bar; // 0 barów, ale sygnał jest
-            gpsSignalColor = Colors.red;
-          } else {
-            gpsSignalIcon = Icons.signal_cellular_off; // Brak sygnału GPS
+          } else if (gpsQualityLevel >= 1) { // Poziomy 1, 2, 3: jakiś sygnał (słabszy)
+            gpsSignalIcon = Icons.signal_cellular_alt; // Ogólna ikona sygnału
+            gpsSignalColor = Colors.orange; // Wskazuje na słabszy, ale obecny sygnał
+          } else { // Poziom 0: brak sygnału
+            gpsSignalIcon = Icons.signal_cellular_off;
             gpsSignalColor = Colors.grey;
             gpsQualityText = "Brak";
           }

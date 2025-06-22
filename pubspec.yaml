@@ -10,14 +10,17 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  provider: ^6.0.5
+  flutter_blue_plus: ^1.27.0
+  provider: ^6.1.1
   fl_chart: ^0.68.0 # Upewnij się, że masz tę wersję lub nowszą
   permission_handler: ^11.3.1
-  flutter_blue_plus: ^1.30.0
-  shared_preferences: ^2.0.0
-  uuid: ^4.3.0
+  shared_preferences: ^2.2.2
+  uuid: ^4.3.3 
   flutter_map: ^6.1.0 # NOWA ZALEŻNOŚĆ DO MAPY
-  latlong2: ^0.9.1   # NOWA ZALEŻNOŚĆ DO WSPÓŁRZĘDNYCH GEOGRAFICZNYCH
+  latlong2: ^0.9.1 
+  path_provider: ^2.1.2 # DODAJ TO
+  csv: ^5.1.1 # DODAJ TO
+  share_plus: ^7.2.2 # DODAJ T  # NOWA ZALEŻNOŚĆ DO WSPÓŁRZĘDNYCH GEOGRAFICZNYCH
 
 dev_dependencies:
   flutter_test:
