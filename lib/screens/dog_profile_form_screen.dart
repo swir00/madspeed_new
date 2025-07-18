@@ -50,6 +50,7 @@ class _DogProfileFormScreenState extends State<DogProfileFormScreen> {
     'Chart Węgierski (Magyar Agár)',
     'Charcik Włoski (Italian Greyhound)',
     'Greyhound',
+    'Whippet',
     'Inne',
   ];
 

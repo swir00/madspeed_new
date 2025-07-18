@@ -20,21 +20,21 @@ class WeatherService {
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         return {
-          'temperature': data['main']['temp'] as double,
-          'feels_like': data['main']['feels_like'] as double,
-          'humidity': data['main']['humidity'] as int,
-          'wind_speed': data['wind']['speed'] as double, // m/s
-          'description': data['weather'][0]['description'] as String,
-          'icon': data['weather'][0]['icon'] as String,
+          'temperature': (data['main']['temp'] as num).toDouble(),
+          'feels_like': (data['main']['feels_like'] as num).toDouble(),
+          'humidity': (data['main']['humidity'] as num).toInt(),
+          'wind_speed': (data['wind']['speed'] as num).toDouble(), // m/s
+          'description': (data['weather'][0]['description'] as String),
+          'icon': (data['weather'][0]['icon'] as String),
         };
       } else {
         // Obsługa błędów API
         print('Błąd pobierania pogody: ${response.statusCode} - ${response.body}');
-        return null;
+        throw Exception('Błąd pobierania pogody: ${response.statusCode}');
       }
     } catch (e) {
       print('Wyjątek podczas pobierania pogody: $e');
-      return null;
+      throw Exception('Wyjątek podczas pobierania pogody: $e');
     }
   }
 

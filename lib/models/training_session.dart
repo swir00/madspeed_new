@@ -72,4 +72,30 @@ class TrainingSession {
       (json.decode(sessionsJson) as List<dynamic>)
           .map<TrainingSession>((item) => TrainingSession.fromJson(item as Map<String, dynamic>))
           .toList();
+
+  TrainingSession copyWith({
+    String? id,
+    String? name,
+    double? maxSpeed,
+    double? distance,
+    double? averageSpeed,
+    DateTime? timestamp,
+    int? duration,
+    List<LogDataPoint>? logData,
+    int? dogId,
+    LatLng? startLocation,
+  }) {
+    return TrainingSession(
+      id: id ?? this.id,
+      name: name ?? this.name,
+      maxSpeed: maxSpeed ?? this.maxSpeed,
+      distance: distance ?? this.distance,
+      averageSpeed: averageSpeed ?? this.averageSpeed,
+      timestamp: timestamp ?? this.timestamp,
+      duration: duration ?? this.duration,
+      logData: logData ?? this.logData,
+      dogId: dogId ?? this.dogId,
+      startLocation: startLocation ?? this.startLocation,
+    );
+  }
 }

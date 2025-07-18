@@ -309,9 +309,9 @@ class _DogDetailsScreenState extends State<DogDetailsScreen> {
                               ),
                             ],
                           ),
-                          _buildDetailRow(Icons.vaccines, 'Ostatnie szczepienie (ogólne):', _currentDogProfile.lastVaccinationDate != null ? DateFormat('yyyy-MM-dd').format(DateTime.parse(_currentDogProfile.lastVaccinationDate!)) : 'Brak danych'),
-                          _buildDetailRow(Icons.vaccines, 'Szczepienie na wściekliznę:', _currentDogProfile.rabiesVaccinationDate != null ? DateFormat('yyyy-MM-dd').format(DateTime.parse(_currentDogProfile.rabiesVaccinationDate!)) : 'Brak danych'),
-                          _buildDetailRow(Icons.medication, 'Ostatnie odrobaczenie:', _currentDogProfile.lastDewormingDate != null ? DateFormat('yyyy-MM-dd').format(DateTime.parse(_currentDogProfile.lastDewormingDate!)) : 'Brak danych'),
+                          _buildDetailRow(Icons.vaccines, 'Ostatnie szczepienie (ogólne):', _currentDogProfile.lastVaccinationDate != null ? DateFormat.yMd(Localizations.localeOf(context).toString()).format(DateTime.parse(_currentDogProfile.lastVaccinationDate!)) : 'Brak danych'),
+                          _buildDetailRow(Icons.vaccines, 'Szczepienie na wściekliznę:', _currentDogProfile.rabiesVaccinationDate != null ? DateFormat.yMd(Localizations.localeOf(context).toString()).format(DateTime.parse(_currentDogProfile.rabiesVaccinationDate!)) : 'Brak danych'),
+                          _buildDetailRow(Icons.medication, 'Ostatnie odrobaczenie:', _currentDogProfile.lastDewormingDate != null ? DateFormat.yMd(Localizations.localeOf(context).toString()).format(DateTime.parse(_currentDogProfile.lastDewormingDate!)) : 'Brak danych'),
                         ],
                       ),
                     ),
@@ -593,7 +593,7 @@ class _DogDetailsScreenState extends State<DogDetailsScreen> {
                                                     style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
                                                   ),
                                                   Text(
-                                                    'Data: ${DateFormat('yyyy-MM-dd HH:mm').format(session.timestamp)}',
+                                                    'Data: ${DateFormat.yMd(Localizations.localeOf(context).toString()).add_Hm().format(session.timestamp)}',
                                                     style: const TextStyle(fontWeight: FontWeight.bold),
                                                   ),
                                                   Text('Dystans: ${(session.distance / 1000).toStringAsFixed(2)} km'),
@@ -601,46 +601,7 @@ class _DogDetailsScreenState extends State<DogDetailsScreen> {
                                                   Text('Maksymalna prędkość: ${session.maxSpeed.toStringAsFixed(1)} km/h'),
                                                   Text('Czas trwania: ${Duration(seconds: session.duration).inMinutes} min ${Duration(seconds: session.duration).inSeconds.remainder(60)} sek'),
                                                   Text('Spalone kalorie (szacunkowo): ${caloriesBurned.toStringAsFixed(2)} kcal'),
-                                                  if (snapshot.connectionState == ConnectionState.waiting)
-                                                    const Padding(
-                                                      padding: EdgeInsets.only(top: 8.0),
-                                                      child: Text('Pobieram dane pogodowe...'),
-                                                    )
-                                                  else if (weatherData != null)
-                                                    Padding(
-                                                      padding: const EdgeInsets.only(top: 8.0),
-                                                      child: Row(
-                                                        children: [
-                                                          Image.network(
-                                                            _weatherService.getWeatherIconUrl(weatherData['icon']),
-                                                            width: 40,
-                                                            height: 40,
-                                                            errorBuilder: (context, error, stackTrace) => const Icon(Icons.cloud_off),
-                                                          ),
-                                                          const SizedBox(width: 8),
-                                                          Expanded(
-                                                            child: Column(
-                                                              crossAxisAlignment: CrossAxisAlignment.start,
-                                                              children: [
-                                                                Text('Pogoda: ${weatherData['description']}'),
-                                                                Text('Temp: ${weatherData['temperature'].toStringAsFixed(1)}°C (odczuwalna: ${weatherData['feels_like'].toStringAsFixed(1)}°C)'),
-                                                                Text('Wiatr: ${weatherData['wind_speed'].toStringAsFixed(1)} m/s, Wilgotność: ${weatherData['humidity']}%'),
-                                                              ],
-                                                            ),
-                                                          ),
-                                                        ],
-                                                      ),
-                                                    )
-                                                  else if (session.startLocation != null)
-                                                    const Padding(
-                                                      padding: EdgeInsets.only(top: 8.0),
-                                                      child: Text('Brak danych pogodowych dla tego treningu (sprawdź połączenie z internetem lub lokalizację).'),
-                                                    )
-                                                  else
-                                                    const Padding(
-                                                      padding: EdgeInsets.only(top: 8.0),
-                                                      child: Text('Brak danych o lokalizacji dla tego treningu.'),
-                                                    ),
+                                                  _buildWeatherContent(snapshot, session),
                                                 ],
                                               ),
                                             ),
@@ -657,6 +618,69 @@ class _DogDetailsScreenState extends State<DogDetailsScreen> {
                 ],
               ),
             ),
+    );
+  }
+
+  Widget _buildWeatherContent(AsyncSnapshot<Map<String, dynamic>?> snapshot, TrainingSession session) {
+    if (session.startLocation == null) {
+      return const Padding(
+        padding: EdgeInsets.only(top: 8.0),
+        child: Text('Brak danych o lokalizacji dla tego treningu.'),
+      );
+    }
+
+    if (snapshot.connectionState == ConnectionState.waiting) {
+      return const Padding(
+        padding: EdgeInsets.only(top: 8.0),
+        child: Text('Pobieram dane pogodowe...'),
+      );
+    }
+
+    if (snapshot.hasError) {
+      // Log the error for debugging
+      print('Błąd FutureBuilder pogody: ${snapshot.error}');
+      return const Padding(
+        padding: EdgeInsets.only(top: 8.0),
+        child: Text(
+          'Brak danych pogodowych. Sprawdź połączenie z internetem lub klucz API.',
+          style: TextStyle(color: Colors.orange),
+        ),
+      );
+    }
+
+    if (snapshot.hasData) {
+      final weatherData = snapshot.data!;
+      return Padding(
+        padding: const EdgeInsets.only(top: 8.0),
+        child: Row(
+          children: [
+            Image.network(
+              _weatherService.getWeatherIconUrl(weatherData['icon']),
+              width: 40,
+              height: 40,
+              errorBuilder: (context, error, stackTrace) => const Icon(Icons.cloud_off),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Pogoda: ${weatherData['description']}'),
+                  Text('Temp: ${weatherData['temperature'].toStringAsFixed(1)}°C (odczuwalna: ${weatherData['feels_like'].toStringAsFixed(1)}°C)'),
+                  Text('Wiatr: ${weatherData['wind_speed'].toStringAsFixed(1)} m/s, Wilgotność: ${weatherData['humidity']}%'),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    // This case should ideally not be reached if startLocation is not null,
+    // but it's a good fallback.
+    return const Padding(
+      padding: EdgeInsets.only(top: 8.0),
+      child: Text('Nie udało się pobrać danych pogodowych.'),
     );
   }
 

@@ -1,7 +1,6 @@
-// lib/main.dart
-
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart'; // Keep this if you use DateFormat elsewhere
+import 'package:flutter_localizations/flutter_localizations.dart'; // Import this
+import 'package:intl/intl.dart';
 import 'package:madspeed_app/screens/scan_screen.dart';
 import 'package:madspeed_app/screens/dashboard_screen.dart';
 import 'package:madspeed_app/screens/speed_master_screen.dart';
@@ -33,6 +32,17 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'MadSpeed App',
+      // Add these two properties for localization
+      localizationsDelegates: const [
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate, // If you use Cupertino widgets
+      ],
+      supportedLocales: const [
+        Locale('en', ''), // English
+        Locale('pl', ''), // Polish
+        // Add other locales your app supports
+      ],
       theme: ThemeData(
         primarySwatch: Colors.blueGrey,
         visualDensity: VisualDensity.adaptivePlatformDensity,
@@ -67,15 +77,15 @@ class MyApp extends StatelessWidget {
           fillColor: Colors.white,
         ),
       ),
-      initialRoute: '/dashboard', // Zmieniono początkową trasę na DashboardScreen
+      initialRoute: '/dashboard',
       routes: {
-        '/': (context) => const ScanScreen(), // Scan screen nadal istnieje pod '/'
-        '/dashboard': (context) => const DashboardScreen(), // Dashboard po połączeniu
-        '/speed_master': (context) => const SpeedMasterScreen(), // Speed Master screen
-        '/training': (context) => const TrainingScreen(), // Training screen
-        '/history': (context) => const HistoryScreen(), // History screen for saved sessions
+        '/': (context) => const ScanScreen(),
+        '/dashboard': (context) => const DashboardScreen(),
+        '/speed_master': (context) => const SpeedMasterScreen(),
+        '/training': (context) => const TrainingScreen(),
+        '/history': (context) => const HistoryScreen(),
         '/info': (context) => const InfoScreen(),
-        '/dog_profiles': (context) => const DogProfileListScreen(), // Trasa do listy profili psów
+        '/dog_profiles': (context) => const DogProfileListScreen(),
       },
     );
   }

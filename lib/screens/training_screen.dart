@@ -3,6 +3,7 @@
 import 'dart:async';
 import 'dart:io'; // Dodano dla File() w CircleAvatar
 import 'package:flutter/material.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:madspeed_app/models/log_data_point.dart';
 import 'package:madspeed_app/models/training_session.dart'; // Będziemy go modyfikować w następnym kroku
 import 'package:madspeed_app/services/ble_service.dart';
@@ -51,15 +52,26 @@ class _TrainingScreenState extends State<TrainingScreen> {
 
   // Metoda do ładowania profili psów
   Future<void> _loadDogProfiles() async {
+    // Najpierw załaduj profile z bazy danych
     final profiles = await DatabaseHelper.instance.getDogProfiles();
+
+    // Następnie spróbuj załadować ID ostatnio wybranego psa
+    final prefs = await SharedPreferences.getInstance();
+    final int? lastDogId = prefs.getInt('last_selected_dog_id');
+    DogProfile? lastSelectedDog;
+    if (lastDogId != null) {
+      try {
+        // Znajdź profil psa na podstawie zapisanego ID
+        lastSelectedDog = profiles.firstWhere((dog) => dog.id == lastDogId);
+      } catch (e) {
+        // Pies mógł zostać usunięty, ID jest nieaktualne
+        await prefs.remove('last_selected_dog_id');
+      }
+    }
+
     setState(() {
       _dogProfiles = profiles;
-      // Opcjonalnie: ustaw domyślnego psa, jeśli jest tylko jeden lub ostatnio używany
-      // if (_dogProfiles.isNotEmpty) {
-      //   // Możesz tutaj załadować ostatnio wybranego psa z SharedPreferences
-      //   // lub ustawić pierwszego psa jako domyślnego
-      //   // _selectedDog = _dogProfiles.first;
-      // }
+      _selectedDog = lastSelectedDog; // Ustaw załadowanego psa jako wybranego
     });
   }
 
@@ -109,11 +121,17 @@ class _TrainingScreenState extends State<TrainingScreen> {
     );
 
     // Aktualizuj wybranego psa, jeśli coś zostało wybrane lub odznaczone
-    if (result != null || (_selectedDog != null && result == null)) {
-      setState(() {
-        _selectedDog = result;
+    // Sprawdzamy, czy wybór się zmienił, aby uniknąć niepotrzebnych operacji
+    if (result != _selectedDog) {
+      setState(() { _selectedDog = result; });
+
+      // Zapisz wybór w SharedPreferences, aby był zapamiętany
+      final prefs = await SharedPreferences.getInstance();
+      if (result != null) {
+        await prefs.setInt('last_selected_dog_id', result.id!);
+      } else {
+        await prefs.remove('last_selected_dog_id');
       }
-      );
     }
   }
 
@@ -327,6 +345,15 @@ class _TrainingScreenState extends State<TrainingScreen> {
       return;
     }
 
+    // Znajdź pierwszy punkt z poprawnymi danymi lokalizacyjnymi
+    LogDataPoint? firstPointWithLocation;
+    for (final point in _loggedData) {
+      if (point.latitude != null && point.longitude != null) {
+        firstPointWithLocation = point;
+        break;
+      }
+    }
+
     final newSession = TrainingSession(
       id: const Uuid().v4(),
       name: _sessionNameController.text,
@@ -337,6 +364,9 @@ class _TrainingScreenState extends State<TrainingScreen> {
       duration: _finalDuration.inSeconds,
       logData: _loggedData,
       dogId: _selectedDog?.id, // ZAPISZ ID WYBRANEGO PSA
+      startLocation: firstPointWithLocation != null
+          ? LatLng(firstPointWithLocation.latitude!, firstPointWithLocation.longitude!)
+          : null,
     );
 
     final prefs = await SharedPreferences.getInstance();

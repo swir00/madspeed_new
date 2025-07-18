@@ -16,25 +16,29 @@ void sendPMTKCommand(const String& command);
 #include <BLEUtils.h>
 #include <BLE2902.h> // Do deskryptora Client Characteristic Configuration (dla Notify)
 #include <TinyGPSPlus.h>
-#include <HardwareSerial.h> // Wymagane dla HardwareSerial(x)
+#include <HardwareSerial.h>
+#include <WiFi.h> // Wymagane dla HardwareSerial(x)
 
-// Nagłówki do pobierania MAC adresu Wi-Fi (do nazwy BLE i SSID AP)
-#include "esp_system.h"    // Dla esp_chip_info() i esp_random()
-#include "esp_wifi.h"      // Dla esp_wifi_get_mac()
-#include <SPIFFS.h>        // Do obsługi systemu plików
+// Nagłówki do pobierania MAC adresu Bluetooth (potrzebne do dynamicznej nazwy BLE)
+#include "esp_system.h"     // Dla esp_chip_info(), esp_random() i esp_read_mac()
+#include "esp_mac.h"        // DODANO: Dla esp_read_mac() i ESP_MAC_BT
+#include "esp_wifi.h"       // DODANO: Dla esp_wifi_stop() i WiFi.mode(WIFI_OFF)
+#include "esp_bt.h"         // DODANO: Dla btStop()
+
+#include <SPIFFS.h>         // Do obsługi systemu plików
 
 // --- Parametry precyzji GNSS ---
-#define MIN_DISTANCE_M    0.01  // Min. odległość do dodania do dystansu (w metrach)
-#define MIN_SPEED_KMH     0.1   // Min. prędkość do uznania za ruch do obliczenia średniej/maksymalnej (w km/h)
-#define MIN_SATS          7     // Min. liczba satelitów dla dobrej precyzji
-#define MAX_HDOP          2.5   // Maks. HDOP (Horizontal Dilution of Precision) dla dobrej precyzji
-#define MAX_FIX_AGE_MS    1500  // Maks. wiek poprawki GNSS (w milisekladach), po którym dane są uznawane za stare
+#define MIN_DISTANCE_M      0.01  // Min. odległość do dodania do dystansu (w metrach)
+#define MIN_SPEED_KMH       0.1   // Min. prędkość do uznania za ruch do obliczenia średniej/maksymalnej (w km/h)
+#define MIN_SATS            7     // Min. liczba satelitów dla dobrej precyzji
+#define MAX_HDOP            2.5   // Maks. HDOP (Horizontal Dilution of Precision) dla dobrej precyzji
+#define MAX_FIX_AGE_MS      1500  // Maks. wiek poprawki GNSS (w milisekladach), po którym dane są uznawane za stare
 
 const char* DATA_FILE = "/log.csv";    // Nazwa pliku do logowania danych
 
 // --- UUID dla usług i charakterystyk BLE ---
 // UWAGA: Te UUID są wygenerowane losowo. Upewnij się, że używasz TYCH SAMYCH w aplikacji Flutter!
-#define SERVICE_UUID              "A2A00000-B1B1-C2C2-D3D3-E4E4E4E4E4E4" // Główna usługa MadSpeed
+#define SERVICE_UUID          "A2A00000-B1B1-C2C2-D3D3-E4E4E4E4E4E4" // Główna usługa MadSpeed
 #define CHAR_UUID_CURRENT_DATA    "A2A00001-B1B1-C2C2-D3D3-E4E4E4E4E4E4" // Aktualne dane z GNSS/Baterii (Notify)
 #define CHAR_UUID_CONTROL         "A2A00002-B1B1-C2C2-D3D3-E4E4E4E4E4E4" // Komendy sterujące (Write)
 #define CHAR_UUID_LOG_DATA        "A2A00003-B1B1-C2C2-D3D3-E4E4E4E4E4E4" // Log Data (NOW NOTIFY for chunks)
@@ -74,12 +78,12 @@ unsigned long lastBleNotifyMillis = 0;
 unsigned long currentBleNotifyInterval = 1000; // Domyślnie 1 sekunda (1000 ms)
 
 // --- Zmienne SSID/Password (ustawione na stałe lub puste, jeśli nie używasz WiFi) ---
-String dynamicSsid; // Dedykowane dla przyszłych funkcji WiFi/WEB
-String dynamicPassword; // Dedykowane dla przyszłych funkcji WiFi/WEB
+String dynamicSsid = "NOT_APPLICABLE"; // Ustawione na stałe, ponieważ WiFi jest wyłączone
+String dynamicPassword = "NOT_APPLICABLE"; // Ustawione na stałe, ponieważ WiFi jest wyłączone
 
 // --- Zmienne dla odczytu baterii ---
 float currentBatteryVoltage = 0.0; // Przechowuje ostatnie odczytane napięcie baterii
-float batteryPercentage = 0.0;      // Przechowuje obliczony procent baterii
+float batteryPercentage = 0.0;       // Przechowuje obliczony procent baterii
 unsigned long lastBatteryReadMillis = 0;
 const unsigned long BATTERY_READ_INTERVAL_MS = 15000; // Odczytuj baterię co 15 sekund
 
@@ -240,6 +244,7 @@ class MyCharacteristicCallbacks: public BLECharacteristicCallbacks {
         if (pCharacteristic->getUUID().toString() == CHAR_UUID_DEVICE_INFO) {
             Serial.println("[BLE] Otrzymano żądanie odczytu informacji o urządzeniu.");
             readBatteryVoltage(); // Odczytaj i przelicz napięcie na procent
+            // Usunięto odniesienia do dynamicSsid i dynamicPassword, ponieważ WiFi jest wyłączone
             String infoJson = "{\"ssid\":\"" + dynamicSsid + "\",\"password\":\"" + dynamicPassword + "\",\"isLoggingActive\":" + (loggingActive ? "true" : "false") + ",\"battery\":" + String(batteryPercentage, 0) + "}"; // Wysyłaj procent, a nie surowe napięcie
             pCharacteristic->setValue(infoJson.c_str());
             Serial.println("[BLE] Wysłano informacje o urządzeniu: " + infoJson);
@@ -360,6 +365,21 @@ void setup() {
   digitalWrite(LED_BUILTIN, HIGH); // Wyłącz LED (active-LOW)
   Serial.println("[LED] Dioda LED włączona na krótko i wyłączona (optymalizacja baterii).");
 
+  // --- Ograniczenie zużycia energii i zasobów ---
+  // Wyłączenie Wi-Fi i BT Classic (BR/EDR)
+  Serial.println("[POWER_SAVE] Wyłączanie WiFi i Bluetooth Classic...");
+  WiFi.mode(WIFI_OFF);
+  esp_wifi_stop();
+  btStop();
+  Serial.println("[POWER_SAVE] WiFi i Bluetooth Classic wyłączone.");
+
+  // Ograniczenie taktowania CPU do 80 MHz
+  Serial.println("[POWER_SAVE] Zmiana taktowania CPU na 80 MHz...");
+  setCpuFrequencyMhz(80);
+  Serial.println("[POWER_SAVE] Taktowanie CPU ustawione na 80 MHz.");
+  // --- Koniec optymalizacji ---
+
+
   // Inicjalizacja UART dla GNSS
   Serial.print("[GNSS] Inicjalizacja UART1 (RX:");
   Serial.print(GNSS_RX_PIN);
@@ -389,22 +409,18 @@ void setup() {
 
   // --- Konfiguracja BLE ---
 
-  uint8_t macWifi[6];
-  esp_wifi_get_mac(WIFI_IF_STA, macWifi);
+  // Pobierz MAC adres Bluetooth
+  uint8_t macBT[6];
+  esp_read_mac(macBT, ESP_MAC_BT); // Użyj ESP_MAC_BT dla MAC adresu Bluetooth
   char macSuffix[7];
-  snprintf(macSuffix, sizeof(macSuffix), "%02X%02X%02X", macWifi[3], macWifi[4], macWifi[5]);
+  // Formatowanie tylko ostatnich 3 bajtów dla krótszej, ale unikalnej nazwy
+  snprintf(macSuffix, sizeof(macSuffix), "%02X%02X%02X", macBT[3], macBT[4], macBT[5]);
   String bleDeviceName = "MadSpeed_" + String(macSuffix);
-  Serial.println("[BLE] Użyto MAC WiFi dla nazwy BLE: " + bleDeviceName);
+  Serial.println("[BLE] Użyto MAC adresu Bluetooth dla nazwy BLE: " + bleDeviceName);
 
   BLEDevice::init(bleDeviceName.c_str());
   Serial.println("[BLE] BLEDevice zainicjalizowany.");
 
-  uint8_t macWifiAp[6];
-  esp_wifi_get_mac(WIFI_IF_AP, macWifiAp);
-  char macSuffixWifiAp[7];
-  snprintf(macSuffixWifiAp, sizeof(macSuffixWifiAp), "%02X%02X%02X", macWifiAp[3], macWifiAp[4], macWifiAp[5]);
-  dynamicSsid = "madspeed_AP_" + String(macSuffixWifiAp);
-  dynamicPassword = "madweb_" + String(macSuffixWifiAp);
   Serial.println("[INFO] Dynamiczny SSID (dla info w BLE): " + dynamicSsid);
   Serial.println("[INFO] Dynamiczne hasło (dla info w BLE): " + dynamicPassword);
 
@@ -418,28 +434,28 @@ void setup() {
 
   // Charakterystyka Current Data (READ, NOTIFY, INDICATE)
   pCurrentDataCharacteristic = pService->createCharacteristic(
-                                        CHAR_UUID_CURRENT_DATA,
-                                        BLECharacteristic::PROPERTY_READ    |
-                                        BLECharacteristic::PROPERTY_NOTIFY |
-                                        BLECharacteristic::PROPERTY_INDICATE
-                                      );
+                                         CHAR_UUID_CURRENT_DATA,
+                                         BLECharacteristic::PROPERTY_READ    |
+                                         BLECharacteristic::PROPERTY_NOTIFY |
+                                         BLECharacteristic::PROPERTY_INDICATE
+                                       );
   pCurrentDataCharacteristic->addDescriptor(new BLE2902());
   Serial.println("[BLE] Charakterystyka CURRENT_DATA utworzona.");
 
   // Charakterystyka Control Commands (WRITE_NR - Write Without Response)
   pControlCharacteristic = pService->createCharacteristic(
-                                        CHAR_UUID_CONTROL,
-                                        BLECharacteristic::PROPERTY_WRITE |
-                                        BLECharacteristic::PROPERTY_WRITE_NR
-                                      );
+                                         CHAR_UUID_CONTROL,
+                                         BLECharacteristic::PROPERTY_WRITE |
+                                         BLECharacteristic::PROPERTY_WRITE_NR
+                                       );
   pControlCharacteristic->setCallbacks(new MyCharacteristicCallbacks());
   Serial.println("[BLE] Charakterystyka CONTROL utworzona.");
 
   // Charakterystyka Log Data (NOTIFY for chunks, NO onRead)
   pLogDataCharacteristic = pService->createCharacteristic( // Reusing the UUID
-                                        CHAR_UUID_LOG_DATA,
-                                        BLECharacteristic::PROPERTY_NOTIFY // NOW NOTIFY
-                                      );
+                                         CHAR_UUID_LOG_DATA,
+                                         BLECharacteristic::PROPERTY_NOTIFY // NOW NOTIFY
+                                       );
   pLogDataCharacteristic->addDescriptor(new BLE2902()); // REQUIRED for NOTIFY
   Serial.println("[BLE] Charakterystyka LOG_DATA (teraz NOTIFY) utworzona.");
   // No setValue here, it will be set chunk by chunk by REQUEST_LOGS command
@@ -447,9 +463,9 @@ void setup() {
 
   // Charakterystyka Device Info (READ)
   pDeviceInfoCharacteristic = pService->createCharacteristic(
-                                        CHAR_UUID_DEVICE_INFO,
-                                        BLECharacteristic::PROPERTY_READ
-                                      );
+                                         CHAR_UUID_DEVICE_INFO,
+                                         BLECharacteristic::PROPERTY_READ
+                                       );
   pDeviceInfoCharacteristic->setCallbacks(new MyCharacteristicCallbacks());
   Serial.println("[BLE] Charakterystyka DEVICE_INFO utworzona.");
 
@@ -655,11 +671,10 @@ void loop() {
           isLogTransferActive = false;
           logFile.close(); // Close the file after full transfer
           currentLogTransferIndex = 0;
-          _totalLinesInLogFile = 0; // Reset count
-          // Wyślij sygnał zakończenia transferu
-          pLogDataCharacteristic->setValue("END");
+          _totalLinesInLogFile = 0; // Reset total lines after transfer
+          Serial.println("[BLE LOG TRANSFER] Transfer logów zakończony. Wysyłam znacznik końca.");
+          pLogDataCharacteristic->setValue("END_LOG_TRANSFER"); // Send a final marker
           pLogDataCharacteristic->notify();
-          Serial.println("[BLE LOG TRANSFER] Zakończono transfer logów.");
       }
   }
 }
