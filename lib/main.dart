@@ -1,4 +1,7 @@
+// lib/main.dart
+
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart'; // Keep this if you use DateFormat elsewhere
 import 'package:madspeed_app/screens/scan_screen.dart';
 import 'package:madspeed_app/screens/dashboard_screen.dart';
 import 'package:madspeed_app/screens/speed_master_screen.dart';
@@ -7,14 +10,15 @@ import 'package:madspeed_app/screens/history_screen.dart';
 import 'package:madspeed_app/services/ble_service.dart';
 import 'package:madspeed_app/screens/info_screen.dart';
 import 'package:provider/provider.dart';
+import 'package:madspeed_app/screens/dog_profile_list_screen.dart';
+import 'package:madspeed_app/database/database_helper.dart';
 
-void main() {
-  // Ensure Flutter widgets are initialized
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await DatabaseHelper.instance.database;
   runApp(
     MultiProvider(
       providers: [
-        // Provide the BLEService to the widget tree
         ChangeNotifierProvider(create: (_) => BLEService()),
       ],
       child: const MyApp(),
@@ -50,7 +54,7 @@ class MyApp extends StatelessWidget {
             textStyle: const TextStyle(fontSize: 18),
           ),
         ),
-        cardTheme: CardThemeData( // Zmieniono na CardThemeData
+        cardTheme: CardThemeData(
           elevation: 5,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15.0)),
           margin: const EdgeInsets.all(10),
@@ -63,14 +67,15 @@ class MyApp extends StatelessWidget {
           fillColor: Colors.white,
         ),
       ),
-      initialRoute: '/', // Set the initial route
+      initialRoute: '/dashboard', // Zmieniono początkową trasę na DashboardScreen
       routes: {
-        '/': (context) => const ScanScreen(), // Scan screen is the starting point
-        '/dashboard': (context) => const DashboardScreen(), // Dashboard after connection
+        '/': (context) => const ScanScreen(), // Scan screen nadal istnieje pod '/'
+        '/dashboard': (context) => const DashboardScreen(), // Dashboard po połączeniu
         '/speed_master': (context) => const SpeedMasterScreen(), // Speed Master screen
         '/training': (context) => const TrainingScreen(), // Training screen
         '/history': (context) => const HistoryScreen(), // History screen for saved sessions
         '/info': (context) => const InfoScreen(),
+        '/dog_profiles': (context) => const DogProfileListScreen(), // Trasa do listy profili psów
       },
     );
   }

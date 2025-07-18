@@ -122,7 +122,7 @@ class _ScanScreenState extends State<ScanScreen> {
                                 child: ListTile(
                                   leading: const Icon(Icons.bluetooth, color: Colors.blueAccent),
                                   title: Text(device.platformName.isNotEmpty ? device.platformName : 'Nieznane urządzenie'),
-                                  subtitle: Text(device.remoteId.toString()),
+                                  // subtitle: Text(device.remoteId.toString()),
                                   trailing: ElevatedButton(
                                     onPressed: bleService.connectedDevice?.remoteId == device.remoteId
                                         ? null // Disable if already connected

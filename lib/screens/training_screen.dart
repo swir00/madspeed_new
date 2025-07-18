@@ -1,12 +1,18 @@
+// lib/screens/training_screen.dart
+
+import 'dart:async';
+import 'dart:io'; // Dodano dla File() w CircleAvatar
 import 'package:flutter/material.dart';
 import 'package:madspeed_app/models/log_data_point.dart';
-import 'package:madspeed_app/models/training_session.dart';
+import 'package:madspeed_app/models/training_session.dart'; // Będziemy go modyfikować w następnym kroku
 import 'package:madspeed_app/services/ble_service.dart';
 import 'package:madspeed_app/widgets/custom_chart.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import 'package:madspeed_app/widgets/status_indicators_widget.dart';
+import 'package:madspeed_app/database/database_helper.dart'; // Import dla DatabaseHelper
+import 'package:madspeed_app/models/dog_profile.dart'; // Import dla DogProfile
 
 class TrainingScreen extends StatefulWidget {
   const TrainingScreen({super.key});
@@ -22,7 +28,10 @@ class _TrainingScreenState extends State<TrainingScreen> {
   double _finalMaxSpeed = 0.0;
   double _finalDistance = 0.0;
   double _finalAverageSpeed = 0.0;
-  Duration _finalDuration = Duration.zero; // Dodana zmienna do przechowywania czasu trwania
+  Duration _finalDuration = Duration.zero;
+
+  DogProfile? _selectedDog; // Nowa zmienna dla wybranego psa
+  List<DogProfile> _dogProfiles = []; // Lista dostępnych profili psów
 
   @override
   void initState() {
@@ -30,6 +39,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
     // Ustaw tryb treningu przy wejściu na stronę
     WidgetsBinding.instance.addPostFrameCallback((_) {
       Provider.of<BLEService>(context, listen: false).setTrainingMode();
+      _loadDogProfiles(); // Załaduj profile psów przy inicjalizacji
     });
   }
 
@@ -39,7 +49,86 @@ class _TrainingScreenState extends State<TrainingScreen> {
     super.dispose();
   }
 
-  void _startLogging(BLEService bleService) {
+  // Metoda do ładowania profili psów
+  Future<void> _loadDogProfiles() async {
+    final profiles = await DatabaseHelper.instance.getDogProfiles();
+    setState(() {
+      _dogProfiles = profiles;
+      // Opcjonalnie: ustaw domyślnego psa, jeśli jest tylko jeden lub ostatnio używany
+      // if (_dogProfiles.isNotEmpty) {
+      //   // Możesz tutaj załadować ostatnio wybranego psa z SharedPreferences
+      //   // lub ustawić pierwszego psa jako domyślnego
+      //   // _selectedDog = _dogProfiles.first;
+      // }
+    });
+  }
+
+  // Metoda do wyboru psa
+  Future<void> _selectDog() async {
+    if (_dogProfiles.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Brak dodanych profili psów. Dodaj psa w sekcji "Profile Psów".')),
+      );
+      return;
+    }
+
+    final DogProfile? result = await showDialog<DogProfile>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Wybierz psa do treningu'),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: ListView.builder(
+            shrinkWrap: true,
+            itemCount: _dogProfiles.length,
+            itemBuilder: (context, index) {
+              final dog = _dogProfiles[index];
+              return ListTile(
+                leading: CircleAvatar(
+                  backgroundImage: dog.photoPath != null && dog.photoPath!.isNotEmpty
+                      ? Image.file(File(dog.photoPath!), fit: BoxFit.cover).image
+                      : null,
+                  child: dog.photoPath == null || dog.photoPath!.isEmpty
+                      ? const Icon(Icons.pets, color: Colors.blueGrey)
+                      : null,
+                ),
+                title: Text(dog.name),
+                subtitle: dog.breed != null ? Text(dog.breed!) : null,
+                onTap: () => Navigator.pop(context, dog),
+              );
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, null), // Pozwól na brak wyboru
+            child: const Text('Anuluj / Bez psa'),
+          ),
+        ],
+      ),
+    );
+
+    // Aktualizuj wybranego psa, jeśli coś zostało wybrane lub odznaczone
+    if (result != null || (_selectedDog != null && result == null)) {
+      setState(() {
+        _selectedDog = result;
+      }
+      );
+    }
+  }
+
+  void _startLogging(BLEService bleService) async { // Zmieniono na async
+    // Wysyłamy twardy reset do urządzenia, aby upewnić się, że cała sesja logowania na urządzeniu zacznie się od zera.
+    await bleService.sendControlCommand("RESET");
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Resetowanie urządzenia i danych...')),
+      );
+      // Daj urządzeniu czas na restart. To opóźnienie jest kluczowe!
+      await Future.delayed(const Duration(seconds: 2)); // Zwiększone opóźnienie dla restartu
+    }
+
+    // Po twardym resecie urządzenia, wysyłamy komendę START_LOG
     bleService.sendControlCommand("START_LOG");
     setState(() {
       _loggedData.clear(); // Czyści wykres przed rozpoczęciem nowego treningu
@@ -62,7 +151,6 @@ class _TrainingScreenState extends State<TrainingScreen> {
 
       // Po zatrzymaniu, odczytaj pełne dane logu z urządzenia
       _loggedData = await bleService.readLogData();
-      // debugPrint("Received ${_loggedData.length} log points."); // Wyłączono debugowanie
 
       _calculateFinalStats(_loggedData);
 
@@ -72,7 +160,6 @@ class _TrainingScreenState extends State<TrainingScreen> {
         );
       }
     } catch (e) {
-      // debugPrint("Error stopping logging or reading log data: $e"); // Wyłączono debugowanie
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Błąd podczas pobierania logów: ${e.toString()}')),
@@ -83,6 +170,9 @@ class _TrainingScreenState extends State<TrainingScreen> {
     } finally {
       _hideLoadingDialog(); // Ukryj dialog ładowania, niezależnie od wyniku
       setState(() {}); // Wymuś odświeżenie UI po zakończeniu operacji
+      if (_loggedData.isNotEmpty) {
+        _showSaveResultDialog(); // Pokaż dialog zapisu po pomyślnym pobraniu danych
+      }
     }
   }
 
@@ -92,7 +182,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
       barrierDismissible: false, // Użytkownik nie może zamknąć dialogu kliknięciem poza nim
       builder: (BuildContext context) {
         final bleService = Provider.of<BLEService>(context);
-        return PopScope( // Użyj PopScope zamiast WillPopScope
+        return PopScope(
           canPop: false, // Blokuj zamykanie przyciskiem Wstecz
           child: AlertDialog(
             title: const Text('Pobieranie logów...'),
@@ -102,8 +192,8 @@ class _TrainingScreenState extends State<TrainingScreen> {
                 return Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    LinearProgressIndicator(value: progress == 0.0 ? null : progress), // Nieskończony, jeśli 0
-                    if (progress > 0.0 && progress <= 1.0) // Pokaż procent tylko jeśli jest sensowny
+                    LinearProgressIndicator(value: progress == 0.0 ? null : progress),
+                    if (progress > 0.0 && progress <= 1.0)
                       Padding(
                         padding: const EdgeInsets.only(top: 8.0),
                         child: Text('${(progress * 100).toInt()}%'),
@@ -119,20 +209,17 @@ class _TrainingScreenState extends State<TrainingScreen> {
   }
 
   void _hideLoadingDialog() {
-    // Sprawdź, czy dialog jest nadal na stosie nawigacji, zanim spróbujesz go zamknąć
     if (Navigator.of(context).canPop()) {
       Navigator.of(context).pop();
     }
   }
 
   void _calculateFinalStats(List<LogDataPoint> data) {
-    // debugPrint("Starting _calculateFinalStats with ${data.length} points."); // Wyłączono debugowanie
     if (data.isEmpty) {
-      // debugPrint("Data is empty, setting stats to 0."); // Wyłączono debugowanie
       _finalMaxSpeed = 0.0;
       _finalDistance = 0.0;
       _finalAverageSpeed = 0.0;
-      _finalDuration = Duration.zero; // Resetuj czas trwania
+      _finalDuration = Duration.zero;
       return;
     }
 
@@ -140,46 +227,33 @@ class _TrainingScreenState extends State<TrainingScreen> {
     double totalSpd = 0.0;
     int speedPoints = 0;
 
-    // Użyj ostatniej wartości dystansu z logu jako całkowity dystans
-    // Upewnij się, że 'distance' w LogDataPoint jest w metrach, a ESP32 wysyłało je jako 'distance_m'
-    // Flutter konwertuje na km później
     double totalDist = data.isNotEmpty ? data.last.distance : 0.0;
-    // debugPrint("Initial totalDist from last point: $totalDist meters"); // Wyłączono debugowanie
-
 
     for (var point in data) {
-      // debugPrint("Processing point: timestamp=${point.timestamp}, speed=${point.speed}, distance=${point.distance}"); // Wyłączono debugowanie
-      // Obliczaj maks. prędkość tylko dla punktów z rzeczywistą prędkością (powyżej 0.1, aby ignorować dryf GPS)
       if (point.speed > 0.1) {
         if (point.speed > maxSpd) {
           maxSpd = point.speed;
-          // debugPrint("New max speed found: $maxSpd km/h"); // Wyłączono debugowanie
         }
         totalSpd += point.speed;
         speedPoints++;
-      } else {
-        // debugPrint("Speed ${point.speed} <= 0.1, skipping for avg/max calculation."); // Wyłączono debugowanie
       }
     }
 
-    // Obliczanie czasu trwania
     Duration duration = Duration.zero;
     if (data.length > 1) {
-      final double startTime = data.first.timestamp.toDouble(); // Rzutowanie na double
-      final double endTime = data.last.timestamp.toDouble();   // Rzutowanie na double
+      final double startTime = data.first.timestamp.toDouble();
+      final double endTime = data.last.timestamp.toDouble();
       duration = Duration(seconds: (endTime - startTime).round());
     }
 
     setState(() {
       _finalMaxSpeed = maxSpd;
-      _finalDistance = totalDist; // Zostaw w metrach do formatowania w _buildMeasurementRow
+      _finalDistance = totalDist;
       _finalAverageSpeed = speedPoints > 0 ? totalSpd / speedPoints : 0.0;
-      _finalDuration = duration; // Ustaw obliczony czas trwania
-      // debugPrint("Calculated Final Stats: Max Speed: $_finalMaxSpeed km/h, Distance: $_finalDistance km, Avg Speed: $_finalAverageSpeed km/h, Duration: $_finalDuration"); // Wyłączono debugowanie
+      _finalDuration = duration;
     });
   }
 
-  // Funkcja formatująca czas trwania
   String _formatDuration(Duration duration) {
     String twoDigits(int n) => n.toString().padLeft(2, '0');
     final String minutes = twoDigits(duration.inMinutes.remainder(60));
@@ -205,10 +279,14 @@ class _TrainingScreenState extends State<TrainingScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text('Maks. prędkość: ${_finalMaxSpeed.toStringAsFixed(2)} km/h'),
-              // Użyj _buildDynamicDistanceText do formatowania dystansu
               _buildDynamicDistanceText(_finalDistance),
               Text('Średnia prędkość: ${_finalAverageSpeed.toStringAsFixed(2)} km/h'),
-              Text('Czas trwania: ${_formatDuration(_finalDuration)}'), // Wyświetl czas trwania
+              Text('Czas trwania: ${_formatDuration(_finalDuration)}'),
+              if (_selectedDog != null) // Wyświetl wybranego psa w dialogu
+                Padding(
+                  padding: const EdgeInsets.only(top: 8.0),
+                  child: Text('Dla psa: ${_selectedDog!.name}', style: const TextStyle(fontWeight: FontWeight.bold)),
+                ),
               const SizedBox(height: 15),
               TextField(
                 controller: _sessionNameController,
@@ -253,12 +331,12 @@ class _TrainingScreenState extends State<TrainingScreen> {
       id: const Uuid().v4(),
       name: _sessionNameController.text,
       maxSpeed: _finalMaxSpeed,
-      // Zapisz dystans w metrach, tak jak jest obliczany i pobierany
       distance: _finalDistance,
       averageSpeed: _finalAverageSpeed,
       timestamp: DateTime.now(),
-      duration: _finalDuration.inSeconds, // Zapisz czas trwania w sekundach
-      logData: _loggedData, // Zapisz rzeczywiste zalogowane punkty
+      duration: _finalDuration.inSeconds,
+      logData: _loggedData,
+      dogId: _selectedDog?.id, // ZAPISZ ID WYBRANEGO PSA
     );
 
     final prefs = await SharedPreferences.getInstance();
@@ -268,7 +346,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
       sessions = TrainingSession.decode(sessionsJson);
     }
     sessions.add(newSession);
-    sessions.sort((a, b) => b.timestamp.compareTo(a.timestamp)); // Sortuj od najnowszych
+    sessions.sort((a, b) => b.timestamp.compareTo(a.timestamp));
 
     await prefs.setString('training_sessions', TrainingSession.encode(sessions));
     _sessionNameController.clear();
@@ -286,8 +364,8 @@ class _TrainingScreenState extends State<TrainingScreen> {
       _finalMaxSpeed = 0.0;
       _finalDistance = 0.0;
       _finalAverageSpeed = 0.0;
-      _finalDuration = Duration.zero; // Resetuj czas trwania
-      _loggedData.clear(); // Wyczyść dane lokalnie
+      _finalDuration = Duration.zero;
+      _loggedData.clear();
     });
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Dane na urządzeniu zresetowane.')),
@@ -298,13 +376,13 @@ class _TrainingScreenState extends State<TrainingScreen> {
   Widget build(BuildContext context) {
     final bleService = Provider.of<BLEService>(context);
     final data = bleService.currentGpsData;
-    bool isLoggingActiveFromDevice = data.isLoggingActive ?? false; // Bezpieczeństwo null
+    bool isLoggingActiveFromDevice = data.isLoggingActive ?? false;
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Trening'),
         actions: [
-          const StatusIndicatorsWidget(), // Dodano pasek statusu
+          const StatusIndicatorsWidget(),
           const SizedBox(width: 10),
           IconButton(
             icon: const Icon(Icons.history),
@@ -323,6 +401,34 @@ class _TrainingScreenState extends State<TrainingScreen> {
             Card(
               elevation: 5,
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15.0)),
+              margin: const EdgeInsets.only(bottom: 16.0),
+              child: ListTile(
+                contentPadding: const EdgeInsets.all(16.0),
+                title: Text(
+                  _selectedDog == null ? 'Wybierz psa do treningu' : 'Wybrany pies: ${_selectedDog!.name}',
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+                ),
+                subtitle: _selectedDog?.breed != null && _selectedDog!.breed!.isNotEmpty
+                    ? Text('Rasa: ${_selectedDog!.breed!}')
+                    : null,
+                leading: CircleAvatar(
+                  radius: 25,
+                  backgroundColor: Theme.of(context).primaryColor.withOpacity(0.1),
+                  backgroundImage: _selectedDog?.photoPath != null && _selectedDog!.photoPath!.isNotEmpty
+                      ? Image.file(File(_selectedDog!.photoPath!), fit: BoxFit.cover).image
+                      : null,
+                  child: _selectedDog?.photoPath == null || _selectedDog!.photoPath!.isEmpty
+                      ? Icon(Icons.pets, size: 30, color: Theme.of(context).primaryColor)
+                      : null,
+                ),
+                trailing: const Icon(Icons.arrow_forward_ios),
+                onTap: _selectDog,
+              ),
+            ),
+
+            Card(
+              elevation: 5,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15.0)),
               child: Padding(
                 padding: const EdgeInsets.all(16.0),
                 child: Column(
@@ -335,7 +441,6 @@ class _TrainingScreenState extends State<TrainingScreen> {
                       '${data.maxSpeed?.toStringAsFixed(2) ?? 'N/A'}',
                       'km/h',
                     ),
-                    // Użyj nowej funkcji do wyświetlania dynamicznego dystansu dla danych bieżących
                     _buildDynamicDistanceRow('Dystans:', data.distance),
                     _buildMeasurementRow(
                       'Średnia prędkość:',
@@ -345,7 +450,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
                     _buildMeasurementRow(
                       'Logowanie aktywne:',
                       isLoggingActiveFromDevice ? 'Tak' : 'Nie',
-                      '', // Brak jednostki
+                      '',
                     ),
 
                     const SizedBox(height: 20),
@@ -395,15 +500,14 @@ class _TrainingScreenState extends State<TrainingScreen> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     _buildMeasurementRow('Maks. prędkość:', '${_finalMaxSpeed.toStringAsFixed(2)}', 'km/h'),
-                    // Użyj nowej funkcji do wyświetlania dynamicznego dystansu dla wyników końcowych
                     _buildDynamicDistanceRow('Całkowity dystans:', _finalDistance),
                     _buildMeasurementRow('Średnia prędkość:', '${_finalAverageSpeed.toStringAsFixed(2)}', 'km/h'),
-                    _buildMeasurementRow('Czas trwania:', _formatDuration(_finalDuration), ''), // Wyświetl czas trwania
-                    const SizedBox(height: 20), // Nowy odstęp
+                    _buildMeasurementRow('Czas trwania:', _formatDuration(_finalDuration), ''),
+                    const SizedBox(height: 20),
                     if (_loggedData.isNotEmpty)
                       SizedBox(
-                        height: 250, // Wysokość wykresu
-                        child: CustomChart(logData: _loggedData), // Przekazujemy _loggedData do CustomChart
+                        height: 250,
+                        child: CustomChart(logData: _loggedData),
                       )
                     else
                       const Center(
@@ -413,7 +517,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
                           style: TextStyle(fontStyle: FontStyle.italic, color: Colors.grey),
                         ),
                       ),
-                    const SizedBox(height: 20), // Dodano odstęp przed nowymi przyciskami
+                    const SizedBox(height: 20),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                       children: [
@@ -435,7 +539,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
                             onPressed: bleService.connectedDevice != null && !isLoggingActiveFromDevice
                                 ? _resetDeviceData
                                 : null,
-                            icon: const Icon(Icons.delete_forever), // Zmieniona ikona dla resetu danych
+                            icon: const Icon(Icons.delete_forever),
                             label: const Text('Reset'),
                             style: ElevatedButton.styleFrom(
                               backgroundColor: Colors.orange,
@@ -474,7 +578,6 @@ class _TrainingScreenState extends State<TrainingScreen> {
     );
   }
 
-  // NOWA FUNKCJA do dynamicznego formatowania dystansu
   Widget _buildDynamicDistanceRow(String label, double? distanceMeters) {
     String valueText;
     String unitText;
@@ -482,27 +585,26 @@ class _TrainingScreenState extends State<TrainingScreen> {
     if (distanceMeters == null) {
       valueText = 'N/A';
       unitText = '';
-    } else if (distanceMeters < 1000) { // Jeśli mniej niż 1 km
-      valueText = distanceMeters.toStringAsFixed(0); // Zaokrągl do całości metrów
+    } else if (distanceMeters < 1000) {
+      valueText = distanceMeters.toStringAsFixed(0);
       unitText = 'm';
-    } else { // 1 km lub więcej
-      valueText = (distanceMeters / 1000.0).toStringAsFixed(3); // Konwertuj na km
+    } else {
+      valueText = (distanceMeters / 1000.0).toStringAsFixed(3);
       unitText = 'km';
     }
 
     return _buildMeasurementRow(label, valueText, unitText);
   }
 
-  // NOWA FUNKCJA do dynamicznego formatowania dystansu w dialogu zapisu
   Widget _buildDynamicDistanceText(double distanceMeters) {
     String valueText;
     String unitText;
 
-    if (distanceMeters < 1000) { // Jeśli mniej niż 1 km
-      valueText = distanceMeters.toStringAsFixed(0); // Zaokrągl do całości metrów
+    if (distanceMeters < 1000) {
+      valueText = distanceMeters.toStringAsFixed(0);
       unitText = 'm';
-    } else { // 1 km lub więcej
-      valueText = (distanceMeters / 1000.0).toStringAsFixed(3); // Konwertuj na km
+    } else {
+      valueText = (distanceMeters / 1000.0).toStringAsFixed(3);
       unitText = 'km';
     }
     return Text('Dystans: $valueText $unitText');

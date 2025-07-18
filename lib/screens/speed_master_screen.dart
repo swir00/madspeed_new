@@ -226,17 +226,7 @@ class _SpeedMasterScreenState extends State<SpeedMasterScreen> {
             },
             tooltip: 'Wyczyść wszystkie zapisane wyniki',
           ),
-          IconButton(
-            icon: const Icon(Icons.history), // Dodano ikonę historii
-            onPressed: () {
-              // Użyj Navigator.pushReplacementNamed, aby zastąpić bieżący ekran
-              // ekranem historii. To pomaga uniknąć błędu SingleTickerProviderStateMixin.
-              Navigator.pushReplacementNamed(context, '/history');
-            },
-            tooltip: 'Historia wyników',
-          ),
-          // Usunięto zduplikowany IconButton dla resetu danych urządzenia z AppBar,
-          // ponieważ jest już w akcjach pod kartą "Aktualny pomiar"
+        
         ],
       ),
       body: SingleChildScrollView(
