@@ -1,7 +1,3 @@
-// --- Konieczne zdefiniowanie aliasów pinów dla Seeed Studio XIAO ESP32S3 ---
-// WERYFIFIKACJA PINÓW NA PODSTAWIE DOSTARCZONEGO SCHEMATU:
-// LED_BUILTIN jest poprawnie zdefiniowany dla tej płytki
-// Potwierdzono, że na Seeed Studio XIAO ESP32S3 dioda LED jest active-LOW
 #define GNSS_RX_PIN 44          // D7 na pinoucie (GPIO44)
 #define GNSS_TX_PIN 43          // D6 na pinoucie (GPIO43)
 #define BATTERY_PIN 2           // A1 na pinoucie (GPIO2)
@@ -28,11 +24,11 @@ void sendPMTKCommand(const String& command);
 #include <SPIFFS.h>         // Do obsługi systemu plików
 
 // --- Parametry precyzji GNSS ---
-#define MIN_DISTANCE_M      0.01  // Min. odległość do dodania do dystansu (w metrach)
-#define MIN_SPEED_KMH       0.1   // Min. prędkość do uznania za ruch do obliczenia średniej/maksymalnej (w km/h)
-#define MIN_SATS            7     // Min. liczba satelitów dla dobrej precyzji
-#define MAX_HDOP            2.5   // Maks. HDOP (Horizontal Dilution of Precision) dla dobrej precyzji
-#define MAX_FIX_AGE_MS      1500  // Maks. wiek poprawki GNSS (w milisekladach), po którym dane są uznawane za stare
+#define MIN_DISTANCE_M      0.05  // Min. odległość do dodania do dystansu (w metrach)
+#define MIN_SPEED_KMH       0.5  // Min. prędkość do uznania za ruch do obliczenia średniej/maksymalnej (w km/h)
+#define MIN_SATS            8     // Min. liczba satelitów dla dobrej precyzji
+#define MAX_HDOP            2.0   // Maks. HDOP (Horizontal Dilution of Precision) dla dobrej precyzji
+#define MAX_FIX_AGE_MS      1000  // Maks. wiek poprawki GNSS (w milisekladach), po którym dane są uznawane za stare
 
 const char* DATA_FILE = "/log.csv";    // Nazwa pliku do logowania danych
 
@@ -60,6 +56,7 @@ TinyGPSPlus gnss;              // Obiekt GNSS
 float liveMaxSpeed = 0;    // Maksymalna prędkość w czasie rzeczywistym
 float liveSumSpeed = 0;    // Suma prędkości do obliczenia średniej w czasie rzeczywistym
 int liveSpeedCount = 0;    // Licznik odczytów prędkości do obliczenia średniej w czasie rzeczywistym
+float currentSpeedForDisplay = 0.0; // Aktualna prędkość do wysyłania przez BLE (globalna)
 
 float distance_km = 0;
 float lastLat = 0.0;
@@ -152,6 +149,10 @@ class MyCharacteristicCallbacks: public BLECharacteristicCallbacks {
           // Transfer zostanie zainicjalizowany przez komendę REQUEST_LOGS z Fluttera.
         } else if (command == "RESET") {
           loggingActive = false;
+          // Po resecie, wracamy do trybu oszczędzania energii
+          Serial.println("[POWER_CONFIG] Reset danych, powrót do 80 MHz.");
+          setCpuFrequencyMhz(80);
+
           liveMaxSpeed = 0; liveSumSpeed = 0; liveSpeedCount = 0; // Resetuj zmienne real-time
           distance_km = 0;
           lastLat = 0.0;
@@ -168,6 +169,10 @@ class MyCharacteristicCallbacks: public BLECharacteristicCallbacks {
           Serial.println("[DATA] Dane zresetowane.");
         } else if (command == "REQUEST_LOGS") { // KOMENDA DLA FLUTTERA - Ulepszona logika
           Serial.println("[BLE] Otrzymano żądanie transferu logów.");
+
+          // Zwiększ taktowanie CPU na czas transferu dla maksymalnej stabilności
+          Serial.println("[POWER_CONFIG] Zwiększanie taktowania CPU do 240 MHz na czas transferu...");
+          setCpuFrequencyMhz(240);
 
           if (logFile) { // If a file is already open, close it first
             logFile.close();
@@ -373,10 +378,11 @@ void setup() {
   btStop();
   Serial.println("[POWER_SAVE] WiFi i Bluetooth Classic wyłączone.");
 
-  // Ograniczenie taktowania CPU do 80 MHz
-  Serial.println("[POWER_SAVE] Zmiana taktowania CPU na 80 MHz...");
+  // Domyślnie ustawiamy niskie taktowanie dla oszczędzania energii.
+  // Zostanie ono dynamicznie zwiększone do 240 MHz na czas transferu logów.
+  Serial.println("[POWER_CONFIG] Ustawianie domyślnego taktowania CPU na 80 MHz...");
   setCpuFrequencyMhz(80);
-  Serial.println("[POWER_SAVE] Taktowanie CPU ustawione na 80 MHz.");
+  Serial.println("[POWER_CONFIG] Taktowanie CPU ustawione na 80 MHz.");
   // --- Koniec optymalizacji ---
 
 
@@ -490,7 +496,7 @@ void loop() {
   setLedState();
 
   // Deklaracja zmiennych na początku funkcji loop
-  float currentSpeedForDisplay = 0.0; // Prędkość do wyświetlania w BLE (z TinyGPSPlus)
+  // float currentSpeedForDisplay = 0.0; // Przeniesiono do zmiennych globalnych, aby nie resetowała się w każdej pętli
   float rawSpeedKmh = 0.0; // Surowa prędkość z GNSS, używana do obliczeń liveMaxSpeed/liveAvgSpeed
 
   // Odczyt danych z modułu GNSS
@@ -619,9 +625,9 @@ void loop() {
 
   // --- Obsługa wysyłania logów przez notify (pojedyncze obiekty JSON) ---
   if (isLogTransferActive && deviceConnected && pLogDataCharacteristic != NULL && logFile) {
-      // Small delay to prevent watchdog timer / allow BLE stack to breathe
-      // This delay is CRITICAL for large file transfers, without it, the BLE stack might get overwhelmed.
-      delay(5); // Adjust this value if you still see issues or want faster transfer (e.g., 1ms-10ms)
+      // This delay is CRITICAL for large file transfers. A slightly longer delay
+      // increases stability at the cost of a slower transfer.
+      delay(10); // Zwiększono z 5ms do 10ms dla większej stabilności
 
       if (logFile.available()) {
           String line = logFile.readStringUntil('\n');
@@ -667,14 +673,22 @@ void loop() {
               }
           }
       } else {
-          // All lines sent, end transfer
+          // Wszystkie linie zostały odczytane z pliku.
+          // Najpierw wyślij znacznik końca do aplikacji. To musi być zrobione przed zmianą stanu.
+          Serial.println("[BLE LOG TRANSFER] Transfer logów zakończony. Wysyłam znacznik końca.");
+          pLogDataCharacteristic->setValue("END_LOG_TRANSFER");
+          pLogDataCharacteristic->notify();
+          delay(100); // Daj chwilę na wysłanie powiadomienia przed czyszczeniem.
+
+          // Po zakończeniu transferu, wracamy do trybu oszczędzania energii
+          Serial.println("[POWER_CONFIG] Transfer zakończony, powrót do 80 MHz.");
+          setCpuFrequencyMhz(80);
+
+          // Teraz wyczyść stan.
           isLogTransferActive = false;
           logFile.close(); // Close the file after full transfer
           currentLogTransferIndex = 0;
           _totalLinesInLogFile = 0; // Reset total lines after transfer
-          Serial.println("[BLE LOG TRANSFER] Transfer logów zakończony. Wysyłam znacznik końca.");
-          pLogDataCharacteristic->setValue("END_LOG_TRANSFER"); // Send a final marker
-          pLogDataCharacteristic->notify();
       }
   }
 }

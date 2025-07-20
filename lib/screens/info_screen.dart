@@ -68,7 +68,7 @@ class InfoScreen extends StatelessWidget {
               children: [
                 Text('Aktualne dane GPS:', style: Theme.of(context).textTheme.titleLarge),
                 const SizedBox(height: 10),
-                //_buildDataRow('Aktualna prędkość:', '${data.currentSpeed?.toStringAsFixed(2) ?? 'N/A'} km/h'),
+                _buildDataRow('Aktualna prędkość:', '${data.currentSpeed?.toStringAsFixed(2) ?? 'N/A'} km/h'),
                 //_buildDataRow('Maksymalna prędkość:', '${data.maxSpeed?.toStringAsFixed(2) ?? 'N/A'} km/h'),
                 // Poprawione wyświetlanie dystansu (formatowanie w metrach/km)
                 //_buildDataRow('Przebyty dystans:', _formatDistance(data.distance)),

@@ -6,11 +6,9 @@ import 'package:intl/intl.dart';
 import 'package:madspeed_app/database/database_helper.dart';
 import 'package:madspeed_app/models/dog_profile.dart';
 import 'package:madspeed_app/models/weight_entry.dart';
-import 'package:madspeed_app/models/training.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:madspeed_app/models/training_session.dart';
 import 'package:madspeed_app/services/weather_service.dart';
-import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:madspeed_app/widgets/training_session_preview_widget.dart';
 import 'package:madspeed_app/widgets/edit_fitness_goals_dialog.dart';
@@ -35,6 +33,9 @@ class _DogDetailsScreenState extends State<DogDetailsScreen> {
   bool _isLoading = true;
   final WeatherService _weatherService = WeatherService();
 
+  // Dodano ScrollController
+  final ScrollController _scrollController = ScrollController();
+
   @override
   void initState() {
     super.initState();
@@ -42,24 +43,48 @@ class _DogDetailsScreenState extends State<DogDetailsScreen> {
     _loadDogData();
   }
 
-  Future<void> _loadDogData() async {
+  @override
+  void dispose() {
+    _scrollController.dispose(); // Zwolnij kontroler po zakończeniu pracy
+    super.dispose();
+  }
+
+  Future<void> _loadDogData({double? scrollOffset}) async {
+    // Zapisz bieżący offset przewijania, jeśli nie podano konkretnego
+    final double currentOffset = scrollOffset ?? (_scrollController.hasClients ? _scrollController.offset : 0.0);
+
     setState(() {
       _isLoading = true;
     });
+
     final updatedDog = await DatabaseHelper.instance.getDogProfile(_currentDogProfile.id!);
     final weights = await DatabaseHelper.instance.getWeightEntriesForDog(_currentDogProfile.id!);
     final sessions = await _getTrainingSessionsForDog(_currentDogProfile.id!);
     final healthEntries = await DatabaseHelper.instance.getHealthEntriesForDog(_currentDogProfile.id!);
 
-    setState(() {
-      if (updatedDog != null) {
-        _currentDogProfile = updatedDog;
+    if (mounted) {
+      setState(() {
+        if (updatedDog != null) {
+          _currentDogProfile = updatedDog;
+        }
+        _weightEntries = weights;
+        _dogTrainingSessions = sessions;
+        _healthEntries = healthEntries;
+        _isLoading = false;
+      });
+
+      // Przywróć pozycję przewijania po załadowaniu danych
+      // Używamy Future.microtask, aby upewnić się, że widgety zostały już zbudowane
+      // i kontroler ma dostęp do scrollable.
+      if (_scrollController.hasClients && currentOffset > 0) {
+        // Dodatkowy warunek, aby nie próbować przewijać, jeśli offset to 0 (góra)
+        Future.microtask(() {
+          if (_scrollController.hasClients) { // Ponowne sprawdzenie po microtask
+             _scrollController.jumpTo(currentOffset.clamp(0.0, _scrollController.position.maxScrollExtent));
+          }
+        });
       }
-      _weightEntries = weights;
-      _dogTrainingSessions = sessions;
-      _healthEntries = healthEntries;
-      _isLoading = false;
-    });
+    }
   }
 
   Future<List<TrainingSession>> _getTrainingSessionsForDog(int dogId) async {
@@ -105,15 +130,21 @@ class _DogDetailsScreenState extends State<DogDetailsScreen> {
                 await DatabaseHelper.instance.updateDogProfile(
                   _currentDogProfile.copyWith(currentWeight: weight),
                 );
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Waga dodana!')),
-                );
-                _loadDogData();
-                Navigator.pop(context);
+
+                if (mounted) {
+                  Navigator.pop(context); // Zamknij dialog
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Waga dodana!')),
+                  );
+                }
+
+                _loadDogData(); // Zwykłe przeładowanie danych
               } else {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Proszę podać prawidłową wagę')),
-                );
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Proszę podać prawidłową wagę')),
+                  );
+                }
               }
             },
             child: const Text('Dodaj'),
@@ -124,11 +155,19 @@ class _DogDetailsScreenState extends State<DogDetailsScreen> {
   }
 
   Future<void> _deleteWeightEntry(int entryId) async {
+    // Zapisz offset przed operacją, która przeładuje dane
+    final double offset = _scrollController.hasClients ? _scrollController.offset : 0.0;
+
     await DatabaseHelper.instance.deleteWeightEntry(entryId);
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Wpis wagi usunięty')),
-    );
-    _loadDogData();
+    
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Wpis wagi usunięty')),
+      );
+    }
+    
+    // Przekaż offset do _loadDogData, aby przywrócić pozycję
+    _loadDogData(scrollOffset: offset); 
   }
 
   String _getDogAge(String? dateOfBirth) {
@@ -221,6 +260,147 @@ class _DogDetailsScreenState extends State<DogDetailsScreen> {
     return '${hrs}g ${mins}m';
   }
 
+  LineChartData _buildWeightChartData() {
+    // Sort entries by timestamp to ensure chronological order for the chart
+    final sortedEntries = List<WeightEntry>.from(_weightEntries)
+      ..sort((a, b) => DateTime.parse(a.timestamp).compareTo(DateTime.parse(b.timestamp)));
+
+    if (sortedEntries.isEmpty) {
+      return LineChartData(
+        gridData: const FlGridData(show: false),
+        titlesData: const FlTitlesData(show: false),
+        borderData: FlBorderData(show: false),
+        lineBarsData: [],
+      );
+    }
+
+    final List<FlSpot> spots = sortedEntries.asMap().entries.map((entry) {
+      return FlSpot(entry.key.toDouble(), entry.value.weight);
+    }).toList();
+
+    double minWeight = sortedEntries.map((e) => e.weight).reduce((a, b) => a < b ? a : b);
+    double maxWeight = sortedEntries.map((e) => e.weight).reduce((a, b) => a > b ? a : b);
+
+    // Add some padding to min/max for better chart visibility
+    minWeight = (minWeight - 1).floorToDouble().clamp(0.0, double.infinity);
+    maxWeight = (maxWeight + 1).ceilToDouble();
+
+    return LineChartData(
+      gridData: FlGridData(
+        show: true,
+        drawVerticalLine: true,
+        getDrawingHorizontalLine: (value) {
+          return FlLine(
+            color: Colors.grey.withOpacity(0.3),
+            strokeWidth: 0.5,
+          );
+        },
+        getDrawingVerticalLine: (value) {
+          return FlLine(
+            color: Colors.grey.withOpacity(0.3),
+            strokeWidth: 0.5,
+          );
+        },
+      ),
+      titlesData: FlTitlesData(
+        show: true,
+        rightTitles: const AxisTitles(
+          sideTitles: SideTitles(showTitles: false),
+        ),
+        topTitles: const AxisTitles(
+          sideTitles: SideTitles(showTitles: false),
+        ),
+        bottomTitles: AxisTitles(
+          sideTitles: SideTitles(
+            showTitles: true,
+            reservedSize: 30,
+            interval: 1,
+            getTitlesWidget: (value, meta) {
+              if (value.toInt() < sortedEntries.length) {
+                final date = DateTime.parse(sortedEntries[value.toInt()].timestamp);
+                return Padding(
+                  padding: const EdgeInsets.only(top: 8.0),
+                  child: Text(
+                    DateFormat('MM-dd').format(date),
+                    style: const TextStyle(fontSize: 10, color: Colors.grey),
+                  ),
+                );
+              }
+              return const Text('');
+            },
+          ),
+        ),
+        leftTitles: AxisTitles(
+          sideTitles: SideTitles(
+            showTitles: true,
+            reservedSize: 40,
+            getTitlesWidget: (value, meta) {
+              return Text(
+                '${value.toStringAsFixed(0)} kg',
+                style: const TextStyle(fontSize: 10, color: Colors.grey),
+              );
+            },
+            interval: (maxWeight - minWeight) / 4 > 1 ? ((maxWeight - minWeight) / 4).roundToDouble() : 1.0, // Dynamic interval
+          ),
+        ),
+      ),
+      borderData: FlBorderData(
+        show: true,
+        border: Border.all(color: const Color(0xff37434d), width: 1),
+      ),
+      minX: 0,
+      maxX: (sortedEntries.length - 1).toDouble(),
+      minY: minWeight,
+      maxY: maxWeight,
+      lineBarsData: [
+        LineChartBarData(
+          spots: spots,
+          isCurved: true,
+          color: Theme.of(context).primaryColor,
+          barWidth: 3,
+          isStrokeCapRound: true,
+          dotData: FlDotData(
+            show: true,
+            getDotPainter: (spot, percent, bar, index) {
+              return FlDotCirclePainter(
+                radius: 4,
+                color: Theme.of(context).primaryColor,
+                strokeWidth: 1.5,
+                strokeColor: Colors.white,
+              );
+            },
+          ),
+          belowBarData: BarAreaData(
+            show: true,
+            color: Theme.of(context).primaryColor.withOpacity(0.3),
+          ),
+        ),
+      ],
+      lineTouchData: LineTouchData(
+        touchTooltipData: LineTouchTooltipData(
+          getTooltipColor: (spot) => Colors.blueAccent,
+          getTooltipItems: (List<LineBarSpot> touchedBarSpots) {
+            return touchedBarSpots.map((barSpot) {
+              final flSpot = barSpot;
+              final entry = sortedEntries[flSpot.x.toInt()];
+              return LineTooltipItem(
+                '${entry.weight.toStringAsFixed(1)} kg\n',
+                const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                children: [
+                  TextSpan(
+                    text: DateFormat('yyyy-MM-dd').format(DateTime.parse(entry.timestamp)),
+                    style: const TextStyle(color: Colors.white, fontSize: 10),
+                  ),
+                ],
+              );
+            }).toList();
+          },
+        ),
+        handleBuiltInTouches: true,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -231,6 +411,7 @@ class _DogDetailsScreenState extends State<DogDetailsScreen> {
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
           : SingleChildScrollView(
+              controller: _scrollController, // Przypisz kontroler
               padding: const EdgeInsets.all(16.0),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -309,9 +490,9 @@ class _DogDetailsScreenState extends State<DogDetailsScreen> {
                               ),
                             ],
                           ),
-                          _buildDetailRow(Icons.vaccines, 'Ostatnie szczepienie (ogólne):', _currentDogProfile.lastVaccinationDate != null ? DateFormat.yMd(Localizations.localeOf(context).toString()).format(DateTime.parse(_currentDogProfile.lastVaccinationDate!)) : 'Brak danych'),
-                          _buildDetailRow(Icons.vaccines, 'Szczepienie na wściekliznę:', _currentDogProfile.rabiesVaccinationDate != null ? DateFormat.yMd(Localizations.localeOf(context).toString()).format(DateTime.parse(_currentDogProfile.rabiesVaccinationDate!)) : 'Brak danych'),
-                          _buildDetailRow(Icons.medication, 'Ostatnie odrobaczenie:', _currentDogProfile.lastDewormingDate != null ? DateFormat.yMd(Localizations.localeOf(context).toString()).format(DateTime.parse(_currentDogProfile.lastDewormingDate!)) : 'Brak danych'),
+                          _buildDetailRow(Icons.vaccines, 'Ostatnie szczepienie (ogólne):', _currentDogProfile.lastVaccinationDate != null ? DateFormat('yyyy-MM-dd').format(DateTime.parse(_currentDogProfile.lastVaccinationDate!)) : 'Brak danych'),
+                          _buildDetailRow(Icons.vaccines, 'Szczepienie na wściekliznę:', _currentDogProfile.rabiesVaccinationDate != null ? DateFormat('yyyy-MM-dd').format(DateTime.parse(_currentDogProfile.rabiesVaccinationDate!)) : 'Brak danych'),
+                          _buildDetailRow(Icons.medication, 'Ostatnie odrobaczenie:', _currentDogProfile.lastDewormingDate != null ? DateFormat('yyyy-MM-dd').format(DateTime.parse(_currentDogProfile.lastDewormingDate!)) : 'Brak danych'),
                         ],
                       ),
                     ),
@@ -408,12 +589,12 @@ class _DogDetailsScreenState extends State<DogDetailsScreen> {
                               : Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: _healthEntries.take(2).map((entry) => Padding(
-                                    padding: const EdgeInsets.symmetric(vertical: 4.0),
-                                    child: Text(
-                                      '${DateFormat('yyyy-MM-dd').format(DateTime.parse((entry as HealthEntry).entryDate))}: ${(entry as HealthEntry).title}',
-                                      style: Theme.of(context).textTheme.bodyMedium,
-                                    ),
-                                  )).toList(),
+                                        padding: const EdgeInsets.symmetric(vertical: 4.0),
+                                        child: Text(
+                                          '${DateFormat('yyyy-MM-dd').format(DateTime.parse(entry.entryDate))}: ${entry.title}',
+                                          style: Theme.of(context).textTheme.bodyMedium,
+                                        ),
+                                      )).toList(),
                                 ),
                         ],
                       ),
@@ -492,8 +673,8 @@ class _DogDetailsScreenState extends State<DogDetailsScreen> {
                                                 ),
                                                 ElevatedButton(
                                                   onPressed: () {
-                                                    _deleteWeightEntry(entry.id!);
-                                                    Navigator.pop(context);
+                                                    Navigator.pop(context); // Zamknij dialog przed usunięciem
+                                                    _deleteWeightEntry(entry.id!); // Wywołaj funkcję usuwającą i przeładowującą
                                                   },
                                                   style: ElevatedButton.styleFrom(
                                                     backgroundColor: Colors.redAccent,
@@ -554,7 +735,6 @@ class _DogDetailsScreenState extends State<DogDetailsScreen> {
                                               showDialog(
                                                 context: context,
                                                 builder: (context) => AlertDialog(
-                                                  // Zmodyfikowany tytuł z przyciskiem "X"
                                                   title: Row(
                                                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                                     children: [
@@ -562,15 +742,15 @@ class _DogDetailsScreenState extends State<DogDetailsScreen> {
                                                         child: Text(session.name),
                                                       ),
                                                       IconButton(
-                                                        icon: const Icon(Icons.close, color: Colors.red), // Czerwony "X"
+                                                        icon: const Icon(Icons.close, color: Colors.red),
                                                         onPressed: () {
-                                                          Navigator.pop(context); // Zamknij dialog
+                                                          Navigator.pop(context);
                                                         },
                                                       ),
                                                     ],
                                                   ),
                                                   contentPadding: EdgeInsets.zero,
-                                                  insetPadding: const EdgeInsets.all(16.0),
+                                                  insetPadding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 24.0),
                                                   content: SizedBox(
                                                     width: MediaQuery.of(context).size.width * 0.9,
                                                     height: MediaQuery.of(context).size.height * 0.7,
@@ -579,7 +759,6 @@ class _DogDetailsScreenState extends State<DogDetailsScreen> {
                                                       dogName: _currentDogProfile.name,
                                                     ),
                                                   ),
-                                                  // Usunięto sekcję actions
                                                 ),
                                               );
                                             },
@@ -593,7 +772,7 @@ class _DogDetailsScreenState extends State<DogDetailsScreen> {
                                                     style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
                                                   ),
                                                   Text(
-                                                    'Data: ${DateFormat.yMd(Localizations.localeOf(context).toString()).add_Hm().format(session.timestamp)}',
+                                                    'Data: ${DateFormat('yyyy-MM-dd HH:mm').format(session.timestamp)}',
                                                     style: const TextStyle(fontWeight: FontWeight.bold),
                                                   ),
                                                   Text('Dystans: ${(session.distance / 1000).toStringAsFixed(2)} km'),
@@ -601,7 +780,25 @@ class _DogDetailsScreenState extends State<DogDetailsScreen> {
                                                   Text('Maksymalna prędkość: ${session.maxSpeed.toStringAsFixed(1)} km/h'),
                                                   Text('Czas trwania: ${Duration(seconds: session.duration).inMinutes} min ${Duration(seconds: session.duration).inSeconds.remainder(60)} sek'),
                                                   Text('Spalone kalorie (szacunkowo): ${caloriesBurned.toStringAsFixed(2)} kcal'),
-                                                  _buildWeatherContent(snapshot, session),
+                                                  if (snapshot.connectionState == ConnectionState.waiting)
+                                                    const Padding(
+                                                      padding: EdgeInsets.only(top: 8.0),
+                                                      child: Text('Pobieram dane pogodowe...'),
+                                                    ),
+                                                  if (snapshot.connectionState == ConnectionState.done && snapshot.hasData)
+                                                    Column(
+                                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                                      children: [
+                                                        Text('Pogoda: ${weatherData!['description']}'),
+                                                        Text('Temperatura: ${weatherData['temperature'].toStringAsFixed(1)}°C'),
+                                                        Text('Wilgotność: ${weatherData['humidity']}%'),
+                                                      ],
+                                                    ),
+                                                  if (snapshot.connectionState == ConnectionState.done && snapshot.hasError)
+                                                    Padding(
+                                                      padding: const EdgeInsets.only(top: 8.0),
+                                                      child: Text('Nie udało się pobrać danych pogodowych: ${snapshot.error}'),
+                                                    ),
                                                 ],
                                               ),
                                             ),
@@ -621,188 +818,22 @@ class _DogDetailsScreenState extends State<DogDetailsScreen> {
     );
   }
 
-  Widget _buildWeatherContent(AsyncSnapshot<Map<String, dynamic>?> snapshot, TrainingSession session) {
-    if (session.startLocation == null) {
-      return const Padding(
-        padding: EdgeInsets.only(top: 8.0),
-        child: Text('Brak danych o lokalizacji dla tego treningu.'),
-      );
-    }
-
-    if (snapshot.connectionState == ConnectionState.waiting) {
-      return const Padding(
-        padding: EdgeInsets.only(top: 8.0),
-        child: Text('Pobieram dane pogodowe...'),
-      );
-    }
-
-    if (snapshot.hasError) {
-      // Log the error for debugging
-      print('Błąd FutureBuilder pogody: ${snapshot.error}');
-      return const Padding(
-        padding: EdgeInsets.only(top: 8.0),
-        child: Text(
-          'Brak danych pogodowych. Sprawdź połączenie z internetem lub klucz API.',
-          style: TextStyle(color: Colors.orange),
-        ),
-      );
-    }
-
-    if (snapshot.hasData) {
-      final weatherData = snapshot.data!;
-      return Padding(
-        padding: const EdgeInsets.only(top: 8.0),
-        child: Row(
-          children: [
-            Image.network(
-              _weatherService.getWeatherIconUrl(weatherData['icon']),
-              width: 40,
-              height: 40,
-              errorBuilder: (context, error, stackTrace) => const Icon(Icons.cloud_off),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('Pogoda: ${weatherData['description']}'),
-                  Text('Temp: ${weatherData['temperature'].toStringAsFixed(1)}°C (odczuwalna: ${weatherData['feels_like'].toStringAsFixed(1)}°C)'),
-                  Text('Wiatr: ${weatherData['wind_speed'].toStringAsFixed(1)} m/s, Wilgotność: ${weatherData['humidity']}%'),
-                ],
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-
-    // This case should ideally not be reached if startLocation is not null,
-    // but it's a good fallback.
-    return const Padding(
-      padding: EdgeInsets.only(top: 8.0),
-      child: Text('Nie udało się pobrać danych pogodowych.'),
-    );
-  }
-
   Widget _buildDetailRow(IconData icon, String label, String value) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4.0),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon, size: 20, color: Colors.grey[700]),
+          Icon(icon, size: 20, color: Theme.of(context).colorScheme.secondary),
           const SizedBox(width: 8),
-          Text(
-            label,
-            style: const TextStyle(fontWeight: FontWeight.bold),
-          ),
-          const SizedBox(width: 4),
-          Expanded(child: Text(value)),
-        ],
-      ),
-    );
-  }
-
-  LineChartData _buildWeightChartData() {
-    if (_weightEntries.isEmpty) {
-      return LineChartData(
-        lineBarsData: [],
-        titlesData: FlTitlesData(show: false),
-        borderData: FlBorderData(show: false),
-        gridData: FlGridData(show: false),
-      );
-    }
-
-    _weightEntries.sort((a, b) => DateTime.parse(a.timestamp).compareTo(DateTime.parse(b.timestamp)));
-
-    final List<FlSpot> spots = _weightEntries.asMap().entries.map((entry) {
-      return FlSpot(entry.key.toDouble(), entry.value.weight);
-    }).toList();
-
-    final double minWeight = _weightEntries.map((e) => e.weight).reduce((a, b) => a < b ? a : b);
-    final double maxWeight = _weightEntries.map((e) => e.weight).reduce((a, b) => a > b ? a : b);
-
-    List<String> xTitles = _weightEntries.map((e) => DateFormat('dd.MM').format(DateTime.parse(e.timestamp))).toList();
-
-    return LineChartData(
-      gridData: FlGridData(
-        show: true,
-        drawVerticalLine: true,
-        getDrawingHorizontalLine: (value) {
-          return const FlLine(
-            color: Color(0xff37434d),
-            strokeWidth: 1,
-          );
-        },
-        getDrawingVerticalLine: (value) {
-          return const FlLine(
-            color: Color(0xff37434d),
-            strokeWidth: 1,
-          );
-        },
-      ),
-      titlesData: FlTitlesData(
-        show: true,
-        rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-        topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-        bottomTitles: AxisTitles(
-          sideTitles: SideTitles(
-            showTitles: true,
-            reservedSize: 30,
-            getTitlesWidget: (value, meta) {
-              if (value.toInt() >= 0 && value.toInt() < xTitles.length) {
-                return SideTitleWidget(
-                  axisSide: meta.axisSide,
-                  space: 8.0,
-                  child: Text(xTitles[value.toInt()], style: const TextStyle(fontSize: 10)),
-                );
-              }
-              return const Text('');
-            },
-          ),
-        ),
-        leftTitles: AxisTitles(
-          sideTitles: SideTitles(
-            showTitles: true,
-            reservedSize: 40,
-            getTitlesWidget: (value, meta) {
-              return Text('${value.toStringAsFixed(1)} kg', style: const TextStyle(fontSize: 10));
-            },
-            interval: (maxWeight - minWeight) > 5 ? 2.0 : 1.0,
-          ),
-        ),
-      ),
-      borderData: FlBorderData(
-        show: true,
-        border: Border.all(color: const Color(0xff37434d), width: 1),
-      ),
-      minX: 0,
-      maxX: (spots.length - 1).toDouble(),
-      minY: minWeight - 1,
-      maxY: maxWeight + 1,
-      lineBarsData: [
-        LineChartBarData(
-          spots: spots,
-          isCurved: true,
-          gradient: LinearGradient(
-            colors: [
-              Theme.of(context).primaryColor,
-              Theme.of(context).colorScheme.secondary,
-            ],
-          ),
-          barWidth: 3,
-          isStrokeCapRound: true,
-          dotData: const FlDotData(show: true),
-          belowBarData: BarAreaData(
-            show: true,
-            gradient: LinearGradient(
-              colors: [
-                Theme.of(context).primaryColor.withOpacity(0.3),
-                Theme.of(context).colorScheme.secondary.withOpacity(0.3),
-              ],
+          Expanded(
+            child: Text(
+              '$label $value',
+              style: Theme.of(context).textTheme.bodyLarge,
             ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }

@@ -2,10 +2,13 @@
 
 import 'package:flutter/material.dart';
 import 'package:madspeed_app/screens/dog_profile_list_screen.dart';
+import 'package:madspeed_app/services/ble_service.dart';
+import 'package:provider/provider.dart';
 import 'package:madspeed_app/screens/history_screen.dart';
 import 'package:madspeed_app/screens/speed_master_screen.dart';
 import 'package:madspeed_app/screens/training_screen.dart';
 import 'package:madspeed_app/screens/info_screen.dart'; // Import dla InfoScreen
+import 'package:madspeed_app/widgets/status_indicators_widget.dart';
 
 class DashboardScreen extends StatelessWidget {
   const DashboardScreen({super.key});
@@ -16,6 +19,19 @@ class DashboardScreen extends StatelessWidget {
       appBar: AppBar(
         title: const Text('MadSpeed'),
         centerTitle: true,
+        actions: [
+          const StatusIndicatorsWidget(),
+          Consumer<BLEService>(
+            builder: (context, bleService, child) {
+              return IconButton(
+                icon: const Icon(Icons.link_off),
+                onPressed: bleService.connectedDevice != null ? () => bleService.disconnect() : null,
+                tooltip: 'Rozłącz urządzenie',
+              );
+            },
+          ),
+          const SizedBox(width: 10),
+        ],
       ),
       body: Padding(
         padding: const EdgeInsets.all(16.0),
@@ -74,7 +90,7 @@ class DashboardScreen extends StatelessWidget {
                       ),
                       const SizedBox(height: 10),
                       Text(
-                        'Skanuj urządzenia BLE',
+                        'Połącz z MadSpeed',
                         textAlign: TextAlign.center,
                         style: TextStyle(
                           fontSize: 16,

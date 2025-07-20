@@ -3,8 +3,8 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:madspeed_app/models/gps_data.dart';
-import 'package:madspeed_app/models/log_data_point.dart';
+import 'package:madspeed_app/models/gps_data.dart'; // Upewnij się, że ścieżka jest poprawna
+import 'package:madspeed_app/models/log_data_point.dart'; // Upewnij się, że ścieżka jest poprawna
 
 // BLE UUIDs from ESP32 code
 const String SERVICE_UUID = "A2A00000-B1B1-C2C2-D3D3-E4E4E4E4E4E4";
@@ -205,21 +205,21 @@ class BLEService with ChangeNotifier {
       if (service.uuid.toString().toUpperCase() == SERVICE_UUID.toUpperCase()) {
         debugPrint("Found MadSpeed Service: ${service.uuid}");
         for (var characteristic in service.characteristics) {
-          debugPrint("   Characteristic: ${characteristic.uuid}");
+          debugPrint("   Characteristic: ${characteristic.uuid}");
           if (characteristic.uuid.toString().toUpperCase() == CHAR_UUID_CURRENT_DATA.toUpperCase()) {
             _currentDataCharacteristic = characteristic;
             await _setupCurrentDataNotifications();
-            debugPrint("     Current Data Characteristic found and notifications enabled.");
+            debugPrint("     Current Data Characteristic found and notifications enabled.");
           } else if (characteristic.uuid.toString().toUpperCase() == CHAR_UUID_CONTROL.toUpperCase()) {
             _controlCharacteristic = characteristic;
-            debugPrint("     Control Characteristic found.");
+            debugPrint("     Control Characteristic found.");
           } else if (characteristic.uuid.toString().toUpperCase() == CHAR_UUID_LOG_DATA.toUpperCase()) {
             _logDataCharacteristic = characteristic;
-            debugPrint("     Log Data Characteristic found. (Now NOTIFY)");
+            debugPrint("     Log Data Characteristic found. (Now NOTIFY)");
             await _setupLogDataNotifications(); // Setup notifications for log chunks
           } else if (characteristic.uuid.toString().toUpperCase() == CHAR_UUID_DEVICE_INFO.toUpperCase()) {
             _deviceInfoCharacteristic = characteristic;
-            debugPrint("     Device Info Characteristic found.");
+            debugPrint("     Device Info Characteristic found.");
           }
         }
         break;
@@ -263,7 +263,7 @@ class BLEService with ChangeNotifier {
     _logDataSubscription = _logDataCharacteristic!.lastValueStream.listen((value) {
       if (value.isNotEmpty) {
         final String receivedData = utf8.decode(value);
-        debugPrint("[LOG CHUNK DEBUG] Received: ${receivedData.length} bytes. Content preview: ${receivedData.substring(0, receivedData.length > 50 ? 50 : receivedData.length)}..."); // Opcjonalnie odkomentuj dla debugowania
+        debugPrint("[LOG CHUNK DEBUG] Received: ${receivedData.length} bytes. Content preview: ${receivedData.substring(0, receivedData.length > 50 ? 50 : receivedData.length)}...");
 
         if (receivedData.startsWith("METADATA_LINES:")) {
           _totalExpectedLogPoints = int.tryParse(receivedData.substring("METADATA_LINES:".length)) ?? 0;
@@ -271,41 +271,34 @@ class BLEService with ChangeNotifier {
           _receivedLogDataContent = ""; // Ensure buffer is clear before receiving data
           _receivedLogPointsCount = 0; // Reset point counter
           _logTransferProgress.value = 0.0; // Reset progress
-        } else if (receivedData == "END_OF_LOG_TRANSFER" || receivedData == "END_EMPTY_LOG") {
-          debugPrint("[LOG DATA] End of log data transfer detected. Signal: $receivedData");
+        }
+        // Obsługa sygnałów zakończenia transferu
+        else if (receivedData == "END_LOG_TRANSFER") {
+          debugPrint("[LOG DATA] Otrzymano END_LOG_TRANSFER, transfer zakończony pomyślnie.");
           if (_logDataCompleter != null && !_logDataCompleter!.isCompleted) {
-            _logTransferProgress.value = 1.0; // Final progress update
-
+            _logTransferProgress.value = 1.0; // Upewnij się, że postęp jest na 100%
             try {
               // Finalize the JSON string: add outer brackets for the complete array
               final String fullLogJson = "[${_receivedLogDataContent}]";
-              debugPrint("[LOG DATA DEBUG] Attempting to decode full JSON (length: ${fullLogJson.length}). Total objects received: $_receivedLogPointsCount");
-
-              // Handle cases where the transfer finishes but no data was received
-              if (_receivedLogDataContent.isEmpty) {
-                if (receivedData == "END_EMPTY_LOG") {
-                  debugPrint("[LOG DATA] Completed with empty list as no data was expected (END_EMPTY_LOG).");
-                  _logDataCompleter!.complete([]);
-                } else if (_totalExpectedLogPoints > 0) {
-                  debugPrint("[LOG DATA ERROR] Expected data but received none before END_OF_LOG_TRANSFER signal.");
-                  _logDataCompleter!.completeError(Exception("Expected log data but received none."));
-                } else {
-                  // This case would be END_OF_LOG_TRANSFER with no expected points, implying an empty log
-                  debugPrint("[LOG DATA] Completed with empty list (END_OF_LOG_TRANSFER for empty file).");
-                  _logDataCompleter!.complete([]);
-                }
-                return;
+              // Jeśli bufor jest pusty, a oczekiwano danych, to błąd
+              if (_receivedLogDataContent.isEmpty && _totalExpectedLogPoints > 0) {
+                 _logDataCompleter!.completeError(Exception("Expected log data but received none before END_LOG_TRANSFER."));
+                 debugPrint("[LOG DATA ERROR] Oczekiwano danych, ale bufor jest pusty po END_LOG_TRANSFER.");
+              } else if (_receivedLogDataContent.isEmpty && _totalExpectedLogPoints == 0) {
+                // To jest przypadek, gdy plik logów jest pusty, ale nie wysłano END_EMPTY_LOG
+                _logDataCompleter!.complete([]);
+                debugPrint("[LOG DATA] Transfer zakończony (END_LOG_TRANSFER) z pustym logiem.");
+              } else {
+                final List<dynamic> jsonList = jsonDecode(fullLogJson);
+                final List<LogDataPoint> logPoints = jsonList.map((e) => LogDataPoint.fromJson(e)).toList();
+                _logDataCompleter!.complete(logPoints);
+                debugPrint("[LOG DATA] Pomyślnie sparsowano ${logPoints.length} punktów logu.");
               }
-
-              final List<dynamic> jsonList = jsonDecode(fullLogJson);
-              final List<LogDataPoint> logPoints = jsonList.map((e) => LogDataPoint.fromJson(e)).toList();
-              _logDataCompleter!.complete(logPoints);
-              debugPrint("[LOG DATA] Successfully parsed ${logPoints.length} log points.");
             } catch (e) {
-              debugPrint("[LOG DATA ERROR] Error decoding full log JSON: $e");
+              debugPrint("[LOG DATA ERROR] Błąd dekodowania pełnego logu JSON po END_LOG_TRANSFER: $e");
               debugPrint("[LOG DATA ERROR] Problematic JSON content (truncated): ${_receivedLogDataContent.substring(0, _receivedLogDataContent.length > 500 ? 500 : _receivedLogDataContent.length)}...");
               _logDataCompleter!.completeError(
-                Exception("Failed to parse log data: $e")
+                Exception("Nie udało się sparsować danych logu po zakończeniu transferu: $e")
               );
             } finally {
               _receivedLogDataContent = ""; // Wyczyść bufor
@@ -313,9 +306,21 @@ class BLEService with ChangeNotifier {
               _receivedLogPointsCount = 0; // Resetuj licznik
             }
           } else {
-            debugPrint("[LOG DATA WARNING] Completer not ready or already completed when END_OF_LOG_TRANSFER received.");
+            debugPrint("[LOG DATA WARNING] Completer nie jest gotowy lub już zakończony po END_LOG_TRANSFER.");
           }
-        } else if (receivedData.startsWith('{') && receivedData.endsWith('}')) { // ONLY append if it looks like a JSON object
+        } else if (receivedData == "END_EMPTY_LOG") {
+          debugPrint("[LOG DATA] Otrzymano END_EMPTY_LOG, zwrócono pustą listę.");
+          if (_logDataCompleter != null && !_logDataCompleter!.isCompleted) {
+            _logTransferProgress.value = 1.0; // Postęp na 100%
+            _logDataCompleter!.complete([]); // Zakończ od razu z pustą listą
+            _receivedLogDataContent = ""; // Wyczyść bufor
+            _totalExpectedLogPoints = 0; // Resetuj całkowity rozmiar
+            _receivedLogPointsCount = 0; // Resetuj licznik
+          } else {
+            debugPrint("[LOG DATA WARNING] Completer nie jest gotowy lub już zakończony po END_EMPTY_LOG.");
+          }
+        }
+        else if (receivedData.startsWith('{') && receivedData.endsWith('}')) { // ONLY append if it looks like a JSON object
           // It's a single JSON object (e.g., {"timestamp":123,...})
           // Add a comma only if it's not the first object
           if (_receivedLogDataContent.isNotEmpty) {
@@ -446,7 +451,7 @@ class BLEService with ChangeNotifier {
     if (_logDataCompleter != null && !_logDataCompleter!.isCompleted) {
       _logDataCompleter!.completeError(Exception("BLEService disposed."));
     }
-    disconnect();
+    disconnect(); // Upewnij się, że wszystko jest odłączone
     super.dispose();
   }
 }

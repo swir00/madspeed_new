@@ -2,8 +2,8 @@
 
 import 'dart:async';
 import 'dart:io'; // Dodano dla File() w CircleAvatar
-import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:flutter/material.dart';
 import 'package:madspeed_app/models/log_data_point.dart';
 import 'package:madspeed_app/models/training_session.dart'; // Będziemy go modyfikować w następnym kroku
 import 'package:madspeed_app/services/ble_service.dart';
@@ -52,27 +52,23 @@ class _TrainingScreenState extends State<TrainingScreen> {
 
   // Metoda do ładowania profili psów
   Future<void> _loadDogProfiles() async {
-    // Najpierw załaduj profile z bazy danych
     final profiles = await DatabaseHelper.instance.getDogProfiles();
-
-    // Następnie spróbuj załadować ID ostatnio wybranego psa
     final prefs = await SharedPreferences.getInstance();
-    final int? lastDogId = prefs.getInt('last_selected_dog_id');
-    DogProfile? lastSelectedDog;
-    if (lastDogId != null) {
-      try {
-        // Znajdź profil psa na podstawie zapisanego ID
-        lastSelectedDog = profiles.firstWhere((dog) => dog.id == lastDogId);
-      } catch (e) {
-        // Pies mógł zostać usunięty, ID jest nieaktualne
-        await prefs.remove('last_selected_dog_id');
-      }
-    }
+    final int? lastSelectedDogId = prefs.getInt('last_selected_dog_id');
 
-    setState(() {
-      _dogProfiles = profiles;
-      _selectedDog = lastSelectedDog; // Ustaw załadowanego psa jako wybranego
-    });
+    if (mounted) {
+      setState(() {
+        _dogProfiles = profiles;
+        if (lastSelectedDogId != null) {
+          try {
+            _selectedDog = _dogProfiles.firstWhere((dog) => dog.id == lastSelectedDogId);
+          } catch (e) {
+            _selectedDog = null;
+            prefs.remove('last_selected_dog_id');
+          }
+        }
+      });
+    }
   }
 
   // Metoda do wyboru psa
@@ -121,16 +117,16 @@ class _TrainingScreenState extends State<TrainingScreen> {
     );
 
     // Aktualizuj wybranego psa, jeśli coś zostało wybrane lub odznaczone
-    // Sprawdzamy, czy wybór się zmienił, aby uniknąć niepotrzebnych operacji
-    if (result != _selectedDog) {
-      setState(() { _selectedDog = result; });
-
-      // Zapisz wybór w SharedPreferences, aby był zapamiętany
+    if (result != null || (_selectedDog != null && result == null)) {
+      setState(() {
+        _selectedDog = result;
+      });
+      // Zapisz ID wybranego psa w SharedPreferences
       final prefs = await SharedPreferences.getInstance();
       if (result != null) {
-        await prefs.setInt('last_selected_dog_id', result.id!);
+        prefs.setInt('last_selected_dog_id', result.id!);
       } else {
-        await prefs.remove('last_selected_dog_id');
+        prefs.remove('last_selected_dog_id');
       }
     }
   }
@@ -143,7 +139,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
         const SnackBar(content: Text('Resetowanie urządzenia i danych...')),
       );
       // Daj urządzeniu czas na restart. To opóźnienie jest kluczowe!
-      await Future.delayed(const Duration(seconds: 2)); // Zwiększone opóźnienie dla restartu
+      await Future.delayed(const Duration(seconds: 3)); // Zwiększono opóźnienie dla większej stabilności
     }
 
     // Po twardym resecie urządzenia, wysyłamy komendę START_LOG
@@ -162,6 +158,8 @@ class _TrainingScreenState extends State<TrainingScreen> {
   }
 
   void _stopLogging(BLEService bleService) async {
+    // Resetuj wskaźnik postępu przed pokazaniem dialogu
+    bleService.logTransferProgress.value = 0.0;
     _showLoadingDialog(); // Pokaż dialog ładowania
 
     try {
@@ -170,17 +168,29 @@ class _TrainingScreenState extends State<TrainingScreen> {
       // Po zatrzymaniu, odczytaj pełne dane logu z urządzenia
       _loggedData = await bleService.readLogData();
 
+      if (_loggedData.isEmpty) {
+        // Jeśli trening trwał, a nie ma danych, jest to błąd.
+        throw Exception("Nie zarejestrowano żadnych danych. Spróbuj ponownie lub zresetuj urządzenie.");
+      }
+
       _calculateFinalStats(_loggedData);
 
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Logowanie treningu zakończone! Dane pobrane.')),
+          const SnackBar(content: Text('Dane treningu pobrane pomyślnie.')),
         );
       }
     } catch (e) {
       if (context.mounted) {
+        String errorMessage = e.toString().toLowerCase();
+        String finalMessage;
+        if (errorMessage.contains('disconnect')) {
+          finalMessage = "Utracono połączenie. Upewnij się, że urządzenie jest w pobliżu i spróbuj ponownie.";
+        } else {
+          finalMessage = 'Błąd: ${e.toString().replaceFirst("Exception: ", "")}';
+        }
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Błąd podczas pobierania logów: ${e.toString()}')),
+          SnackBar(content: Text(finalMessage), duration: const Duration(seconds: 4)),
         );
       }
       _loggedData.clear(); // Wyczyść dane, jeśli wystąpił błąd
@@ -190,6 +200,61 @@ class _TrainingScreenState extends State<TrainingScreen> {
       setState(() {}); // Wymuś odświeżenie UI po zakończeniu operacji
       if (_loggedData.isNotEmpty) {
         _showSaveResultDialog(); // Pokaż dialog zapisu po pomyślnym pobraniu danych
+      }
+    }
+  }
+
+  void _redownloadLastTraining(BLEService bleService) async {
+    // Sprawdź, czy trening nie jest w toku
+    if (bleService.currentGpsData.isLoggingActive ?? false) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Zatrzymaj bieżący trening przed ponownym pobraniem.')),
+        );
+      }
+      return;
+    }
+
+    // Resetuj wskaźnik postępu przed pokazaniem dialogu
+    bleService.logTransferProgress.value = 0.0;
+    _showLoadingDialog(); // Pokaż dialog ładowania
+
+    try {
+      // Nie wysyłamy komendy STOP_LOG, ponieważ zakładamy, że logowanie jest już zatrzymane.
+      // Po prostu próbujemy ponownie odczytać dane, które powinny wciąż być na urządzeniu.
+      _loggedData = await bleService.readLogData();
+
+      if (_loggedData.isEmpty) {
+        throw Exception("Nie znaleziono danych do pobrania. Rozpocznij nowy trening, aby zresetować urządzenie.");
+      }
+
+      _calculateFinalStats(_loggedData);
+
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Dane treningu pobrane pomyślnie.')),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        String errorMessage = e.toString().toLowerCase();
+        String finalMessage;
+        if (errorMessage.contains('disconnect')) {
+          finalMessage = "Utracono połączenie. Upewnij się, że urządzenie jest w pobliżu i spróbuj pobrać dane ponownie.";
+        } else {
+          finalMessage = 'Błąd: ${e.toString().replaceFirst("Exception: ", "")}';
+        }
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(finalMessage), duration: const Duration(seconds: 4)),
+        );
+      }
+      _loggedData.clear(); // Wyczyść dane, jeśli wystąpił błąd
+      _calculateFinalStats([]); // Zresetuj statystyki
+    } finally {
+      _hideLoadingDialog();
+      setState(() {});
+      if (_loggedData.isNotEmpty) {
+        _showSaveResultDialog();
       }
     }
   }
@@ -345,15 +410,18 @@ class _TrainingScreenState extends State<TrainingScreen> {
       return;
     }
 
-    // Znajdź pierwszy punkt z poprawnymi danymi lokalizacyjnymi
-    LogDataPoint? firstPointWithLocation;
+    // --- POPRAWKA ---
+    // Znajdź pierwszy prawidłowy punkt GPS z logów, aby użyć go do pobrania pogody.
+    // Zapewnia to, że lokalizacja jest zawsze powiązana z treningiem,
+    // a nie z aktualną pozycją telefonu podczas zapisu.
+    LogDataPoint? firstValidPoint;
     for (final point in _loggedData) {
-      if (point.latitude != null && point.longitude != null) {
-        firstPointWithLocation = point;
+      // Sprawdź, czy współrzędne są nie-null i nie są zerowe
+      if (point.latitude != null && point.longitude != null && point.latitude != 0.0 && point.longitude != 0.0) {
+        firstValidPoint = point;
         break;
       }
     }
-
     final newSession = TrainingSession(
       id: const Uuid().v4(),
       name: _sessionNameController.text,
@@ -364,8 +432,8 @@ class _TrainingScreenState extends State<TrainingScreen> {
       duration: _finalDuration.inSeconds,
       logData: _loggedData,
       dogId: _selectedDog?.id, // ZAPISZ ID WYBRANEGO PSA
-      startLocation: firstPointWithLocation != null
-          ? LatLng(firstPointWithLocation.latitude!, firstPointWithLocation.longitude!)
+      startLocation: firstValidPoint != null
+          ? LatLng(firstValidPoint.latitude!, firstValidPoint.longitude!)
           : null,
     );
 
@@ -513,6 +581,19 @@ class _TrainingScreenState extends State<TrainingScreen> {
                           ),
                         ),
                       ],
+                    ),
+                    const SizedBox(height: 10),
+                    ElevatedButton.icon(
+                      onPressed: bleService.connectedDevice != null && !isLoggingActiveFromDevice
+                          ? () => _redownloadLastTraining(bleService)
+                          : null,
+                      icon: const Icon(Icons.download_for_offline),
+                      label: const Text('Pobierz ostatni trening ponownie'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.teal,
+                        foregroundColor: Colors.white,
+                        minimumSize: const Size(double.infinity, 40),
+                      ),
                     ),
                   ],
                 ),

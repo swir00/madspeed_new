@@ -38,7 +38,8 @@ class _ScanScreenState extends State<ScanScreen> {
                 icon: bleService.isScanning
                     ? const CircularProgressIndicator(color: Colors.white)
                     : const Icon(Icons.refresh),
-                onPressed: bleService.isScanning ? null : () => bleService.startScan(),
+                onPressed: bleService.isScanning ? null : () => bleService.startScan(), // Odśwież listę
+                tooltip: 'Odśwież listę',
               );
             },
           ),
@@ -112,43 +113,37 @@ class _ScanScreenState extends State<ScanScreen> {
                         : ListView.builder(
                             itemCount: bleService.scanResults.length,
                             itemBuilder: (context, index) {
-                              BluetoothDevice device = bleService.scanResults[index];
-                              // Pobierz domyślny kolor tła z motywu dla Elevated Button
-                              final defaultButtonBackgroundColor = Theme.of(context).elevatedButtonTheme.style?.backgroundColor?.resolve({}) ?? Colors.blueAccent;
+                              final BluetoothDevice device = bleService.scanResults[index];
+                              final bool isCurrentlyConnected = bleService.connectedDevice?.remoteId == device.remoteId;
 
                               return Card(
                                 margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                                 elevation: 3,
                                 child: ListTile(
                                   leading: const Icon(Icons.bluetooth, color: Colors.blueAccent),
-                                  title: Text(device.platformName.isNotEmpty ? device.platformName : 'Nieznane urządzenie'),
-                                  // subtitle: Text(device.remoteId.toString()),
+                                  title: Text(device.platformName.isNotEmpty
+                                      ? device.platformName
+                                      : 'Nieznane urządzenie'),
                                   trailing: ElevatedButton(
-                                    onPressed: bleService.connectedDevice?.remoteId == device.remoteId
-                                        ? null // Disable if already connected
-                                        : () async {
-                                            bool connected = await bleService.connectToDevice(device);
-                                            if (connected) {
-                                              // Navigate to dashboard upon successful connection
-                                              if (mounted) {
-                                                Navigator.pushReplacementNamed(context, '/dashboard');
-                                              }
-                                            } else {
-                                              if (mounted) {
-                                                ScaffoldMessenger.of(context).showSnackBar(
-                                                  const SnackBar(content: Text('Nie udało się połączyć z urządzeniem.')),
-                                                );
-                                              }
-                                            }
-                                          },
+                                    onPressed: () async {
+                                      if (isCurrentlyConnected) {
+                                        await bleService.disconnect();
+                                      } else {
+                                        bool connected = await bleService.connectToDevice(device);
+                                        if (connected && mounted) {
+                                          Navigator.pushReplacementNamed(context, '/dashboard');
+                                        } else if (mounted) {
+                                          ScaffoldMessenger.of(context).showSnackBar(
+                                            const SnackBar(content: Text('Nie udało się połączyć z urządzeniem.')),
+                                          );
+                                        }
+                                      }
+                                    },
                                     style: ElevatedButton.styleFrom(
-                                      backgroundColor: bleService.connectedDevice?.remoteId == device.remoteId
-                                          ? Colors.green.shade300
-                                          : defaultButtonBackgroundColor, // Użyj rozstrzygniętego koloru
+                                      backgroundColor: isCurrentlyConnected ? Colors.orange : Theme.of(context).primaryColor,
+                                      foregroundColor: Colors.white,
                                     ),
-                                    child: bleService.connectedDevice?.remoteId == device.remoteId
-                                        ? const Text('Połączono')
-                                        : const Text('Połącz'),
+                                    child: Text(isCurrentlyConnected ? 'Rozłącz' : 'Połącz'),
                                   ),
                                 ),
                               );
